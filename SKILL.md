@@ -400,7 +400,10 @@ Produce a structured summary covering:
   - Template extension collisions found in Block 1
   - Any `columnSuffix` fields identified in Block 1
   - Super Table single-row access patterns that may need `.one()` added
-  - Any `user` link type rows that were dropped (no native equivalent)
+  - Any `user` link type rows that were skipped (no native equivalent)
+  - Any `tel` link type rows that were skipped — re-enter as URL links using `tel:+...` prefix
+  - Any `asset` link type rows that were skipped (no native equivalent)
+  - Any fields where duplicate Super Table handles caused the second field's data to be unmigratable (manual re-entry required)
 - Going Live reminder:
   For each remote environment, add MySQL charset vars to `.env`, deploy,
   run `php craft up`, remove charset vars, run `php craft db/convert-charset`.
