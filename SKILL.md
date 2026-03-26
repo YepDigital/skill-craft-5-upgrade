@@ -154,26 +154,9 @@ Check whether `modules/Module.php` already exists in the project.
   `modules/console/controllers/MigrateLinkfieldController.php` already exists.
   If both exist, skip to step 2.4.
 
-- If the module does not exist, copy the following files from this skill's `module/`
-  directory into the project:
-
-  | Source (skill) | Destination (project) |
-  |---|---|
-  | `module/Module.php` | `modules/Module.php` |
-  | `module/console/controllers/MigrateLinkfieldController.php` | `modules/console/controllers/MigrateLinkfieldController.php` |
-
-- Ensure `config/app.php` contains the module registration keys. Refer to this
-  skill's `module/app.php` for the keys that must be present. Merge them into the
-  existing `config/app.php` return array if absent. Do not replace the file; only
-  add the missing `modules` and `bootstrap` entries:
-  ```php
-  'modules' => [
-      'my-module' => \modules\Module::class,
-  ],
-  'bootstrap' => ['my-module'],
-  ```
-
-- Confirm `composer.json` has a PSR-4 autoload entry `"modules\\": "modules/"`. Add if absent. Do not run `composer update` yet.
+- If not, follow `references/module-setup.md` from this skill's directory to copy
+  the module files, register the module in `config/app.php`, and confirm the
+  PSR-4 autoload entry in `composer.json`. Do not run `composer update` yet.
 
 ### 2.4 Update `vlucas/phpdotenv` if needed
 If below `^5.6.0`, update the constraint in `composer.json` to `^5.6.0`.
