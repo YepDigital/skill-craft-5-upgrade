@@ -280,7 +280,20 @@ Report full output and row counts per field.
 Cross-reference fields found against the Block 1 inventory (step 1.7).
 Flag any discrepancies: fields in the inventory missing from dry-run output, or
 unexpected fields appearing.
-Note: `tel` link type will be remapped to `phone` automatically.
+
+**Unmigrable link types — flag before proceeding:**
+The following link types have no native Craft 5 equivalent and will not be migrated:
+
+| Typed Link Field type | Outcome |
+|---|---|
+| `tel` | Skipped with `[ERROR] Invalid link type: phone`. Re-enter manually as a URL link using a `tel:+...` prefix. |
+| `asset` | Skipped as unmappable. No native equivalent in the Craft 5 Link field. Re-enter manually. |
+| `user` | Skipped as unmappable. No native equivalent. |
+
+Count rows of each type per field in the dry-run output. Include these counts in
+the Block 4 report and add the affected fields to the manual follow-up list in
+Block 6.6. Do not proceed to the live migration until the user acknowledges the
+data loss for these rows.
 
 ---
 
