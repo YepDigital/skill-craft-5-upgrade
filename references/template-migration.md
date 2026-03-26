@@ -76,20 +76,6 @@ which returned an empty value object. All link field accesses must include a nul
 
 Apply null guards to every link field access in every template updated in Block 5.
 
-## Unmigrable link types
-
-The following Typed Link Field types have no native Craft 5 Link field equivalent:
-
-| Type | Behaviour during migration | Manual resolution |
-|---|---|---|
-| `tel` | Stored as `phone` in source table after first migration pass; throws `[ERROR] Invalid link type: phone` on cleanup | Re-enter as a URL link using `tel:+...` prefix |
-| `asset` | Skipped as `unmappable type 'asset'` | Re-enter manually; there is no asset link type in the native Link field |
-| `user` | Skipped as unmappable | No equivalent — omit or replace with another link type |
-
-These rows are never written to the `_v2` field. They will be blank in the CP after migration.
-
----
-
 ## Do not use `.with()` with native Link field handles
 
 In Craft 5, passing a native `craft\fields\Link` field handle to `.with()` on an element
