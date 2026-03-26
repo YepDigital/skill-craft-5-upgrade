@@ -70,7 +70,7 @@ Do not flag it as a blocker if it is present.
 ### 1.4 Linkfield presence check
 Check whether `sebastianlenz/linkfield` appears in `composer.json` under `require`.
 Record the result as **LINKFIELD_PRESENT: yes** or **LINKFIELD_PRESENT: no**.
-This determines whether Blocks 2.3, 2.5, 2.5a, and Block 4 are relevant.
+This determines whether Blocks 2.3, 2.5, 2.6, and Block 4 are relevant.
 Include this prominently in the Block 1 report.
 
 ### 1.5 `vlucas/phpdotenv`
@@ -85,7 +85,8 @@ Flag any pending or reserved jobs as a blocker.
 ### 1.7 / 1.7a / 1.8 Audit script
 Run the audit script from the project root:
 ```bash
-bash path/to/skill/scripts/audit.sh
+bash path/to/this-skill/scripts/audit.sh
+# This skill is at ~/.claude/skills/craft-5-upgrade/
 ```
 This covers all three steps in one pass:
 - **1.7** — linkfield field inventory (handle, name, enabled types, columnSuffix)
@@ -281,7 +282,7 @@ running the live migration.**
 
 ---
 
-### 4.3 Live migration
+### 4.2 Live migration
 ```bash
 echo "yes" | php craft my-module/migrate-linkfield/run
 ```
@@ -318,13 +319,13 @@ mapped to its `_v2` counterpart:
 Run the template patcher in dry-run mode first, review the diffs, then apply:
 ```bash
 # Dry run
-python3 path/to/skill/scripts/patch-templates.py \
+python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
   --files templates/_components/buttons/single.twig templates/_partials/ctas.twig \
   --dry-run
 
 # Apply
-python3 path/to/skill/scripts/patch-templates.py \
+python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
   --files templates/_components/buttons/single.twig templates/_partials/ctas.twig
 ```
@@ -372,9 +373,11 @@ Skip if no Redactor fields exist.
 ### 6.3 Linkfield cleanup and removal (linkfield projects only)
 **Skip if LINKFIELD_PRESENT is "no".**
 ```bash
-php craft my-module/migrate-linkfield/run --cleanup
+echo "yes" | php craft my-module/migrate-linkfield/run --cleanup
 composer remove sebastianlenz/linkfield --no-interaction
 ```
+The cleanup command prompts "Have you taken a database backup?" and defaults to "no",
+so pipe `yes` to pass it non-interactively (same as the live migration in Block 4).
 
 ### 6.4 Apply project config
 ```bash

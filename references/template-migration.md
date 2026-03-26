@@ -14,7 +14,7 @@ Read this file before starting Block 5 (Template updates).
 | `field.getType` | `field.type` |
 | `field.getElement()` | `field.element` |
 | `field.getLinkAttributes()` | macro (see below) |
-| `field|length` | `field.url|length` |
+| `field|length` | `field.url|length` *(manual — not automated by patcher script)* |
 | `craft.matrixBlocks()` | `craft.entries()` |
 
 ## Field handle changes
@@ -137,11 +137,21 @@ Apply this pattern to every Super Table field access in updated templates.
 
 ## Template editing approach
 
-Always use Python string replacement for template edits. Do not use the Edit tool's
+**Use the patcher script first** (`scripts/patch-templates.py` in this skill's directory).
+It handles API substitutions, handle renames, and `.with()` removal automatically.
+
+Apply the following manually after the script, as the patcher cannot handle them:
+- Null guards on all link field accesses (see Null safety section above)
+- `field|length` → `field.url|length` checks
+- `craft.matrixBlocks()` → `craft.entries()` replacements
+- Super Table `.one()` patterns
+- Templates with multiple loops needing different per-loop handles (see below)
+
+For any manual edits, use Python string replacement rather than the Edit tool's
 `old_str` matching. Tab-indented files cause `old_str` matching to fail silently or
 produce incorrect replacements.
 
-Use this pattern for every template file:
+Use this pattern for manual template edits:
 ```python
 import re
 
@@ -176,22 +186,22 @@ in the file. Review the diff after each file to confirm only intended changes we
 
 ### Templates with multiple loops requiring different handles
 
-If a template contains two or more `{% for %}` loops that both use `item.navLink.*`
-patterns but correspond to different Super Table block types (and therefore different
-deduplicated `_v2` handles), split the file content at a unique structural delimiter
-between the loops before applying substitutions:
+If a template contains two or more `{% for %}` loops that both use the same field handle
+but correspond to different Super Table block types (and therefore different deduplicated
+`_v2` handles), split the file content at a unique structural delimiter between the loops
+before applying substitutions:
 
 ```python
-path = 'templates/_partials/navigation/_desktop.twig'
+path = 'templates/_partials/example.twig'
 content = open(path).read()
 
 # Find a unique delimiter that sits between the two loops
-delimiter = '{# Utility Nav Items #}'  # or a comment, closing tag, etc.
+delimiter = '{# Second Loop Section #}'  # or a comment, closing tag, etc.
 top, bottom = content.split(delimiter, 1)
 
 # Apply different handles to each half
-top = top.replace('item.navLink.', 'item.navLink3_v2.')
-bottom = bottom.replace('item.navLink.', 'item.navLink_v2.')
+top = top.replace('item.linkField.', 'item.linkField2_v2.')
+bottom = bottom.replace('item.linkField.', 'item.linkField_v2.')
 
 open(path, 'w').write(top + delimiter + bottom)
 ```
