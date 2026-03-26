@@ -310,8 +310,25 @@ null safety patterns, Super Table `.one()` guidance, and the template editing ap
 
 ### 5.1 Update all templates from Block 1 step 1.8
 
-Build a handle mapping JSON from the Block 1 audit output — every linkfield handle
-mapped to its `_v2` counterpart:
+**Before building the handle mapping, verify each `_v2` field's name against its
+template context.** Deduplication order is non-deterministic — the field name is
+the only reliable indicator of which handle belongs to which context. Run using
+**MYSQL_CMD** recorded in Block 1.2:
+
+```bash
+MYSQL_CMD <db_name> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%_v2' ORDER BY handle;"
+```
+
+Cross-reference each handle's name against the template loops from step 1.8.
+For example, if two loops both used `navLink` originally:
+- `navLink_v2` → "Utility Navigation - Link" → use in utility nav loops
+- `navLink3_v2` → "Main Navigation - Link" → use in main nav loops
+
+Record the confirmed mapping before proceeding. Assigning the wrong handle to the
+wrong loop will silently produce empty URLs with no error.
+
+Build a handle mapping JSON — every linkfield handle mapped to its confirmed `_v2`
+counterpart:
 ```json
 {"primaryLink": "primaryLink_v2", "navLink": "navLink_v2"}
 ```
