@@ -64,7 +64,7 @@ else
     TMPFILE=$(mktemp)
     for f in $ST_FILES; do
       # Extract field handles from block type definitions (indented handle: lines)
-      grep -n '^\s\+handle:' "$f" | awk -v file="$f" '{print $2 "\t" file}' >> "$TMPFILE" || true
+      grep -En '^\s+handle:' "$f" | awk -v file="$f" '{print $2 "\t" file}' >> "$TMPFILE" || true
     done
     # Find handles appearing more than once
     DUPES=$(awk '{print $1}' "$TMPFILE" | sort | uniq -d || true)
@@ -74,7 +74,7 @@ else
       echo
       for dupe in $DUPES; do
         found "Duplicate handle: '$dupe'"
-        grep -P "^$dupe\t" "$TMPFILE" | while IFS=$'\t' read -r h file; do
+        awk -v d="$dupe" 'BEGIN{FS="\t"} $1==d' "$TMPFILE" | while IFS=$'\t' read -r h file; do
           echo "    → $file"
         done
       done
