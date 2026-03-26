@@ -76,6 +76,19 @@ which returned an empty value object. All link field accesses must include a nul
 
 Apply null guards to every link field access in every template updated in Block 5.
 
+**Common miss — `elseif` fallback branches:**
+Templates often have a pattern like:
+```twig
+{% if entry is defined and item.link_v2 and item.link_v2.type == "entry" %}
+    {# ... #}
+{% elseif item.someTitle|length %}
+    <a href="{{ item.link_v2.url }}">  {# ← throws if link_v2 is null #}
+```
+The `elseif` branch fires precisely when `link_v2` is null (that's why the first condition failed). Always use the ternary guard here:
+```twig
+<a href="{{ item.link_v2 ? item.link_v2.url : '' }}">
+```
+
 ## Do not use `.with()` with native Link field handles
 
 In Craft 5, passing a native `craft\fields\Link` field handle to `.with()` on an element
