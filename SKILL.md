@@ -99,6 +99,13 @@ Search all files under `templates/` for:
 - `.getLinkAttributes(`
 - `craft.matrixBlocks(`
 
+Also search for `.with([` calls that include any linkfield handle from step 1.7
+(e.g. `.with(["navLink"])`, `.with(["primaryLink"])`). These calls must be removed
+after migration because native Craft 5 Link fields cannot be eager-loaded — passing
+a Link field handle to `.with()` causes Craft to return an `ElementCollection`
+instead of a `LinkData` object, breaking all subsequent `.url`, `.label`, and
+`.type` access.
+
 List every file and line number found.
 
 ### 1.9 Template extension collisions
