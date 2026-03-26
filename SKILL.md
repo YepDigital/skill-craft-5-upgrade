@@ -89,6 +89,14 @@ non-deterministic from config alone — you will need to confirm it via the CP o
 query after the upgrade. Record all duplicated handles here so Block 5 template work
 can reference the correct suffixed handle per template loop.
 
+**Data loss risk when a duplicated handle also carries linkfield data:**
+The `MigrateLinkfieldController` discovers fields via `getAllFields()`, which only
+surfaces one field instance per handle. If two Super Table block types share a handle
+and both contain linkfield data, only one field's data will be migrated — the other
+field's rows will be silently skipped. If this situation is present, flag it
+prominently in the Block 1 report and warn the user that the affected entries will
+need manual re-entry after the upgrade. There is no automated resolution.
+
 ### 1.8 Template linkfield API usage
 Search all files under `templates/` for:
 - `.getUrl(`
