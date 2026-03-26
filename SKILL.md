@@ -45,6 +45,17 @@ automatically; user-provided values are more reliable.
 Check `.env` and `config/db.php` for `CRAFT_DB_DRIVER`. Record MySQL or PostgreSQL.
 Record any existing `CRAFT_DB_CHARSET` / `CRAFT_DB_COLLATION` values.
 
+If MySQL, test the connection now and record the working form as **MYSQL_CMD**:
+```bash
+mysql -u root -e "SELECT 1"
+```
+If that fails with a socket error, retry with:
+```bash
+mysql -h 127.0.0.1 -u root -e "SELECT 1"
+```
+Record whichever works (e.g. `MYSQL_CMD: mysql -h 127.0.0.1 -u root`). Flag a
+failed connection as a blocker. This is needed for any diagnostic queries in Block 4.
+
 ### 1.3 Plugin inventory
 Read `composer.json`. For every package under `require`, check Packagist for a
 Craft 5-compatible release. Flag any missing Craft 5 release as a blocker.
