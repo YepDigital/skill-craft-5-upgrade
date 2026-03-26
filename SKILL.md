@@ -235,11 +235,18 @@ php craft project-config/apply
 ```
 
 ### 3.3 Install any newly added plugins
-For each plugin newly added to `composer.json` during this upgrade, run:
+`php craft up` (step 3.2) typically installs all plugins automatically. Run
+`php craft plugin/list` to confirm every required plugin shows as installed.
+
+If any plugin is missing, install it:
 ```bash
 php craft plugin/install <handle>
 ```
-Installing an already-installed plugin is harmless.
+
+Note: plugin handles often differ from Composer package names (e.g.
+`carlcs/craft-uielementfields` installs as handle `ui-element-fields`).
+Always derive the correct handle from `php craft plugin/list` output rather
+than guessing from the package name.
 
 ### 3.4 MySQL charset conversion (MySQL only)
 Remove `CRAFT_DB_CHARSET` and `CRAFT_DB_COLLATION` from `.env` (and from `config/db.php` if present). Then run:
