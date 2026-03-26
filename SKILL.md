@@ -249,9 +249,11 @@ php craft db/convert-charset
 
 ### 3.5 Verify Craft 5
 ```bash
-php craft --version
+composer show craftcms/cms | grep -E "^versions"
 ```
-Confirm output shows Craft 5.x. Stop if not.
+Confirm output shows a 5.x version. Stop if not.
+
+Note: `php craft --version` is not a valid Craft CLI command and will exit non-zero.
 
 ---
 
