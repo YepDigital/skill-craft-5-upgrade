@@ -376,10 +376,18 @@ php craft project-config/apply
 ```
 
 ### 6.5 Run fields/auto-merge
+`php craft fields/auto-merge` requires an interactive terminal and cannot be run
+by Claude — it exits with code 1 non-interactively. Ask the user to run it
+themselves:
+
 ```bash
 php craft fields/auto-merge
 ```
-Present each merge batch to the user; do not accept automatically. If any merges are accepted, remind the user to commit the generated migration files and run `php craft up` in all other environments before deploying.
+
+Instruct them to review each proposed merge batch carefully and only accept where
+the fields are genuinely the same type and config. If any merges are accepted,
+remind the user to commit the generated migration files and run `php craft up`
+in all other environments before deploying.
 
 ### 6.6 Final report
 Produce a structured summary covering:
