@@ -82,50 +82,35 @@ php craft queue/info
 ```
 Flag any pending or reserved jobs as a blocker.
 
-### 1.7 Linkfield field inventory
-Search `config/project/` for fields with `type: lenz\linkfield\fields\LinkField`.
-For each field record: handle, name, context (global / Matrix / Super Table),
-enabled link types, and any `columnSuffix` value.
+### 1.7 / 1.7a / 1.8 Audit script
+Run the audit script from the project root:
+```bash
+bash path/to/skill/scripts/audit.sh
+```
+This covers all three steps in one pass:
+- **1.7** — linkfield field inventory (handle, name, enabled types, columnSuffix)
+- **1.7a** — Super Table duplicate field handles
+- **1.8** — deprecated API calls and `.with([` calls in templates
 
-### 1.7a Super Table duplicate field handles
-If `verbb/super-table` is present, search `config/project/` for field handles that
-appear in more than one Super Table block type. List each duplicated handle, the block
-type name it belongs to, and the section/field that contains the block type.
+Read the output and record findings. Do not grep files manually unless the script
+fails to run.
 
-This matters because after the Craft 5 upgrade Super Table block types become native
-Matrix entry types. Fields sharing a handle across multiple block types get globally
-deduplicated by Craft: the first occurrence keeps the original handle, subsequent
-occurrences get numeric suffixes (`handle2`, `handle3`, etc.). The exact mapping is
-non-deterministic from config alone — you will need to confirm it via the CP or a DB
-query after the upgrade. Record all duplicated handles here so Block 5 template work
-can reference the correct suffixed handle per template loop.
+**After running, note for step 1.7a:**
+Duplicate handles will be globally deduplicated after upgrade (handle → handle2,
+handle3...). The exact mapping is non-deterministic from config alone — confirm via
+the CP or a DB query after the upgrade.
 
 **Data loss risk when a duplicated handle also carries linkfield data:**
-The `MigrateLinkfieldController` discovers fields via `getAllFields()`, which only
-surfaces one field instance per handle. If two Super Table block types share a handle
-and both contain linkfield data, only one field's data will be migrated — the other
-field's rows will be silently skipped. If this situation is present, flag it
-prominently in the Block 1 report and warn the user that the affected entries will
-need manual re-entry after the upgrade. There is no automated resolution.
+`getAllFields()` only surfaces one field instance per handle. If two Super Table
+block types share a handle and both contain linkfield data, only one field's data
+will be migrated. Flag this prominently and warn the user that the affected entries
+will need manual re-entry. There is no automated resolution.
 
-### 1.8 Template linkfield API usage
-Search all files under `templates/` for:
-- `.getUrl(`
-- `.getCustomText(`
-- `.getTarget(`
-- `.getType`
-- `.getElement(`
-- `.getLinkAttributes(`
-- `craft.matrixBlocks(`
-
-Also search for `.with([` calls that include any linkfield handle from step 1.7
-(e.g. `.with(["navLink"])`, `.with(["primaryLink"])`). These calls must be removed
-after migration because native Craft 5 Link fields cannot be eager-loaded — passing
-a Link field handle to `.with()` causes Craft to return an `ElementCollection`
-instead of a `LinkData` object, breaking all subsequent `.url`, `.label`, and
-`.type` access.
-
-List every file and line number found.
+**After running, note for step 1.8:**
+Cross-reference all `.with([` matches against the linkfield handles from 1.7.
+Any `.with()` call that includes a linkfield handle must be removed after migration —
+native Link fields cannot be eager-loaded (returns `ElementCollection` instead of
+`LinkData`, breaking `.url` / `.label` / `.type` access).
 
 ### 1.9 Template extension collisions
 Search `templates/` for directories containing both a `.twig` and `.html` file
@@ -323,10 +308,37 @@ skill's directory.** It contains the full API mapping table, Twig macro definiti
 null safety patterns, Super Table `.one()` guidance, and the template editing approach.
 
 ### 5.1 Update all templates from Block 1 step 1.8
-Work through every file flagged in the audit using the Python approach from the
-template migration reference. Apply all API substitutions, handle renames, null
-guards, and Super Table `.one()` fixes. Replace `craft.matrixBlocks()` with
-`craft.entries()`.
+
+Build a handle mapping JSON from the Block 1 audit output — every linkfield handle
+mapped to its `_v2` counterpart:
+```json
+{"primaryLink": "primaryLink_v2", "navLink": "navLink_v2"}
+```
+
+Run the template patcher in dry-run mode first, review the diffs, then apply:
+```bash
+# Dry run
+python3 path/to/skill/scripts/patch-templates.py \
+  --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
+  --files templates/_components/buttons/single.twig templates/_partials/ctas.twig \
+  --dry-run
+
+# Apply
+python3 path/to/skill/scripts/patch-templates.py \
+  --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
+  --files templates/_components/buttons/single.twig templates/_partials/ctas.twig
+```
+
+The script applies API method substitutions (`.getUrl()` → `.url` etc.), handle
+renames (field accesses only, not local variable names), and removes `.with()`
+calls for migrated handles.
+
+**Apply manually after the script:**
+- Null guards on all link field accesses (see `references/template-migration.md`)
+- Templates with multiple loops needing different per-loop handles (script cannot
+  distinguish which loop uses which deduplicated handle — split and patch manually)
+- Super Table `.one()` patterns
+- `craft.matrixBlocks()` → `craft.entries()` replacements
 
 Do not refactor, reformat, or change anything beyond what the migration requires.
 Minimal diff only.
