@@ -23,7 +23,7 @@ Every linkfield handle gains a `_v2` suffix:
 - `entry.primaryLink` becomes `entry.primaryLink_v2`
 - `block.ctaButton` becomes `block.ctaButton_v2`
 - `nav.promoButton.linkTo` becomes `nav.promoButton.linkTo_v2`
-- Apply to all handles from Block 1 step 1.6.
+- Apply to all handles from Block 1 step 1.7.
 
 ## `getLinkAttributes()` replacement macro
 
