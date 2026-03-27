@@ -130,6 +130,118 @@ class MigrateLinkfieldController extends Controller
         return ExitCode::OK;
     }
 
+    /**
+     * Migrate linkfield data using direct DB discovery — bypasses plugin field
+     * instantiation. Use this on production when `sebastianlenz/linkfield 3.0.0-beta`
+     * cannot instantiate Craft 4-era field types, causing `run` to report
+     * "No Typed Link Fields found."
+     *
+     * Requires project-config/apply to have already run so the *_v2 target fields
+     * exist in the DB. Old linkfield entries remain in the fields table as zombie
+     * records (Craft cannot delete them without the plugin class), which this action
+     * uses for discovery.
+     *
+     * Use --cleanup to delete those zombie field records after migration.
+     */
+    public function actionRunDirect(): int
+    {
+        $this->stdout("\n=== Typed Link Field → Native Link Migration (direct DB mode) ===\n", Console::FG_CYAN, Console::BOLD);
+        $this->stdout("Discovering fields via DB query (bypasses plugin field instantiation).\n\n");
+
+        $oldFields = Craft::$app->getDb()->createCommand(
+            'SELECT [[id]], [[handle]] FROM {{%fields}} WHERE [[type]] = :type',
+            [':type' => 'lenz\linkfield\fields\LinkField']
+        )->queryAll();
+
+        if (empty($oldFields)) {
+            $this->stdout("No Typed Link Field entries found in fields table. Nothing to do.\n", Console::FG_GREEN);
+            return ExitCode::OK;
+        }
+
+        $plan = [];
+        foreach ($oldFields as $row) {
+            if ($this->field !== null && $row['handle'] !== $this->field) {
+                continue;
+            }
+            $newHandle = $row['handle'] . $this->suffix;
+            $newField  = Craft::$app->getFields()->getFieldByHandle($newHandle);
+            $count     = (int) Craft::$app->getDb()->createCommand(
+                'SELECT COUNT(DISTINCT [[elementId]]) FROM {{%lenz_linkfield}} WHERE [[fieldId]] = :fieldId',
+                [':fieldId' => $row['id']]
+            )->queryScalar();
+
+            $found = $newField instanceof NativeLinkField;
+            $this->stdout(sprintf(
+                "  ID %-5s %-28s → %-28s  rows: %-6s  [%s]\n",
+                $row['id'], $row['handle'], $newHandle, $count,
+                $found ? 'OK' : 'TARGET NOT FOUND — run project-config/apply first'
+            ));
+
+            if ($found) {
+                $plan[(int)$row['id']] = ['handle' => $row['handle'], 'newField' => $newField];
+            }
+        }
+
+        if ($this->dryRun) {
+            $this->stdout("\n[Dry-run mode] No changes written.\n", Console::FG_YELLOW);
+            return ExitCode::OK;
+        }
+
+        if (empty($plan)) {
+            $this->stderr("\nNo target fields found. Run `php craft project-config/apply` first, then retry.\n", Console::FG_RED);
+            return ExitCode::UNSPECIFIED_ERROR;
+        }
+
+        $this->stdout("\n");
+        $confirm = $this->prompt(
+            'This will modify live element data. Have you taken a database backup? [yes/no]',
+            ['default' => 'no']
+        );
+        if (strtolower(trim($confirm)) !== 'yes') {
+            $this->stdout("Aborted. Please take a backup first.\n", Console::FG_RED);
+            return ExitCode::OK;
+        }
+
+        $summary = [];
+
+        foreach ($plan as $oldId => $info) {
+            $this->stdout("\n--- {$info['handle']} → {$info['newField']->handle} ---\n", Console::FG_CYAN);
+
+            $rows = Craft::$app->getDb()->createCommand(
+                'SELECT [[elementId]], [[siteId]], [[type]], [[linkedUrl]], [[linkedId]], [[payload]]
+                 FROM {{%lenz_linkfield}} WHERE [[fieldId]] = :fieldId',
+                [':fieldId' => $oldId]
+            )->queryAll();
+
+            [$migrated, $skipped] = $this->migrateRowsDirect($rows, $info['newField']->handle);
+
+            $summary[$info['handle']] = ['migrated' => $migrated, 'skipped' => $skipped, 'status' => 'OK'];
+            $this->stdout("  Migrated: {$migrated}  Skipped: {$skipped}\n", Console::FG_GREEN);
+
+            if ($this->cleanup) {
+                $this->stdout("  [Cleanup] Deleting zombie field '{$info['handle']}' (ID: {$oldId})...\n", Console::FG_YELLOW);
+                $field = Craft::$app->getFields()->getFieldById($oldId);
+                if ($field) {
+                    Craft::$app->getFields()->deleteField($field);
+                } else {
+                    // Field class uninstantiable — remove the DB row directly
+                    Craft::$app->getDb()->createCommand()
+                        ->delete('{{%fields}}', ['id' => $oldId])
+                        ->execute();
+                }
+            }
+        }
+
+        $this->printSummary($summary);
+
+        if ($this->cleanup) {
+            $this->stdout("\n[Cleanup] Zombie fields removed. Run `php craft project-config/apply` to sync.\n", Console::FG_YELLOW);
+        }
+
+        $this->stdout("\nDone.\n", Console::FG_GREEN, Console::BOLD);
+        return ExitCode::OK;
+    }
+
     // -------------------------------------------------------------------------
     // Discovery
     // -------------------------------------------------------------------------
@@ -470,6 +582,49 @@ class MigrateLinkfieldController extends Controller
         if (!Craft::$app->getFields()->deleteField($field)) {
             $this->stderr("  [ERROR] Could not delete field '{$field->handle}'.\n", Console::FG_RED);
         }
+    }
+
+    /**
+     * Migrate rows from lenz_linkfield to a target field handle, without needing
+     * the old field as a typed object. Used by actionRunDirect().
+     *
+     * @return array{int, int} [migrated, skipped]
+     */
+    private function migrateRowsDirect(array $rows, string $newHandle): array
+    {
+        $migrated = 0;
+        $skipped  = 0;
+
+        foreach ($rows as $row) {
+            try {
+                $mapped = $this->mapDbRow($row);
+                if ($mapped === null) { $skipped++; continue; }
+
+                $element = Craft::$app->getElements()->getElementById(
+                    (int)$row['elementId'], null, (int)$row['siteId']
+                );
+                if (!$element) { $skipped++; continue; }
+
+                $element->setFieldValue($newHandle, $mapped);
+                if (!Craft::$app->getElements()->saveElement($element, false)) {
+                    $skipped++;
+                    $this->stderr(
+                        "  [ERROR] Element #{$element->id}: " . implode(', ', $element->getFirstErrors()) . "\n",
+                        Console::FG_RED
+                    );
+                    continue;
+                }
+                $migrated++;
+            } catch (\Throwable $e) {
+                $skipped++;
+                $this->stderr(
+                    "  [ERROR] Element #{$row['elementId']}: " . $e->getMessage() . "\n",
+                    Console::FG_RED
+                );
+            }
+        }
+
+        return [$migrated, $skipped];
     }
 
     // -------------------------------------------------------------------------

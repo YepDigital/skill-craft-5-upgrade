@@ -396,6 +396,20 @@ composer remove sebastianlenz/linkfield --no-interaction
 The cleanup command prompts "Have you taken a database backup?" and defaults to "no",
 so pipe `yes` to pass it non-interactively (same as the live migration in Block 4).
 
+If `run --cleanup` reports "No Typed Link Fields found", the 3.0.0-beta cannot
+instantiate the old field types in this environment. Use the direct fallback instead:
+```bash
+echo "yes" | php craft my-module/migrate-linkfield/run-direct --cleanup
+composer remove sebastianlenz/linkfield --no-interaction
+```
+
+After removal, rebuild project config from the current DB state. **This step is
+critical** — without it, the committed YAML files will not include the `_v2` fields
+in field layouts, and production's `project-config/apply` will not add them:
+```bash
+php craft project-config/rebuild
+```
+
 ### 6.4 Apply project config
 ```bash
 php craft project-config/apply
@@ -431,8 +445,33 @@ Produce a structured summary covering:
   - Any `asset` link type rows that were skipped (no native equivalent)
   - Any fields where duplicate Super Table handles caused the second field's data to be unmigratable (manual re-entry required)
 - Going Live reminder:
-  For each remote environment, add MySQL charset vars to `.env`, deploy,
-  run `php craft up`, remove charset vars, run `php craft db/convert-charset`.
+  The linkfield data migration must run on each remote environment separately —
+  it is not captured in project config. Use the following sequence per environment:
+
+  1. Add MySQL charset vars to `.env` (if MySQL — see Block 2.7)
+  2. Deploy code + run `composer install`
+  3. Run `php craft up` (DB migrations + project-config/apply — this creates the
+     `_v2` fields in the DB and attempts to remove old linkfield fields, but old
+     field records typically survive as zombie entries because the 3.0.0-beta
+     cannot instantiate Craft 4-era field types)
+  4. Run `php craft project-config/apply` (explicit second pass to ensure layouts
+     from the rebuilt project config are fully applied)
+  5. Migrate linkfield data:
+     ```bash
+     php craft my-module/migrate-linkfield/run --dry-run
+     ```
+     If this reports "No Typed Link Fields found", use the direct fallback:
+     ```bash
+     php craft my-module/migrate-linkfield/run-direct --dry-run
+     ```
+     Once the dry-run output looks correct, run live (with `echo "yes" |` prefix).
+     Use whichever command reported fields in the dry-run.
+  6. Remove zombie linkfield field records (if `run-direct` was used):
+     ```bash
+     echo "yes" | php craft my-module/migrate-linkfield/run-direct --cleanup
+     php craft project-config/apply
+     ```
+  7. Remove charset vars from `.env`, then run `php craft db/convert-charset` (MySQL only)
 
 ---
 
