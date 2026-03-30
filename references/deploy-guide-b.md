@@ -1,61 +1,4 @@
-# DEPLOY.md Templates
-
-Use **Variant A** when `LINKFIELD_PRESENT = "no"`.
-Use **Variant B** when `LINKFIELD_PRESENT = "yes"`.
-
-Fill in all `[placeholders]` from the session's recorded values before writing the file.
-
----
-
-## Variant A — No linkfield: standard code deployment
-
-No DB push needed. Craft's migrations and project config carry all changes.
-
-```markdown
-# Craft 5 Production Deployment — [project name]
-Generated [date].
-
-## Upgrade summary
-- Craft version: [version from Block 3.5]
-- Plugins updated: [list from Block 3.3]
-- Templates patched: [list from Block 5, or "none"]
-- fields/auto-merge migration files committed: [yes / no]
-
-## Deployment steps
-
-### 1. Deploy code
-[Deployment command or steps based on their method, e.g.:
-- Forge: trigger deploy via dashboard or `forge deploy <site-id>`
-- Git + SSH: `git push origin main` then `ssh user@host "cd /path && git pull"`
-- Generic SSH: log into server, `cd /path/to/site && git pull origin main`]
-
-### 2. Install dependencies
-```bash
-composer install --no-dev
-```
-
-### 3. Run Craft upgrade
-```bash
-php craft up
-php craft project-config/apply
-```
-
-### 4. Verify
-- [ ] Log into Craft CP — confirm Craft [version] in footer
-- [ ] Browse key page types in browser — confirm no errors
-- [ ] Check logs: `tail -n 50 storage/logs/web.log`
-
-## Rollback
-```bash
-git checkout [craft4-branch]
-composer install --no-dev
-php craft up
-```
-```
-
----
-
-## Variant B — Linkfield present: DB-push deployment
+# DEPLOY.md Template — Linkfield present (DB-push deployment)
 
 The linkfield data migration has already run in the local database. The local
 Craft 5 DB must be pushed to production — do not run migration commands on production.
@@ -63,6 +6,8 @@ Craft 5 DB must be pushed to production — do not run migration commands on pro
 Content delta: this deployment overwrites the production database with the local
 migrated copy. Any content added to production after the initial local DB snapshot
 was taken will be lost. Put the site in maintenance mode first.
+
+Fill in all `[placeholders]` from the session's recorded values before writing the file.
 
 ```markdown
 # Craft 5 Production Deployment — [project name]

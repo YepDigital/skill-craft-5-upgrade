@@ -485,10 +485,11 @@ Do not ask about deployment method or DB details if LINKFIELD_PRESENT = "no".
 
 ### 7.3 Generate DEPLOY.md
 
-Read `references/deploy-guide.md` from this skill's directory. Use Variant A
-if LINKFIELD_PRESENT = "no", Variant B if LINKFIELD_PRESENT = "yes". Fill in
-all placeholders from the session's recorded values, then write the file to
-`DEPLOY.md` in the project root.
+- If LINKFIELD_PRESENT = "no": read `references/deploy-guide-a.md` from this skill's directory.
+- If LINKFIELD_PRESENT = "yes": read `references/deploy-guide-b.md` from this skill's directory.
+
+Fill in all placeholders from the session's recorded values, then write the
+result to `DEPLOY.md` in the project root.
 
 ### 7.4 Checkpoint
 
