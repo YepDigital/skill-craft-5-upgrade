@@ -305,9 +305,13 @@ on at least 3-5 entries. Wait for confirmation.**
 If LINKFIELD_PRESENT = "yes": do not proceed until Block 4 is confirmed complete with CP data verified.
 If LINKFIELD_PRESENT = "no": Block 4 was skipped — proceed directly.
 
-**Before starting this block, read `references/template-migration.md` from this
-skill's directory.** It contains the full API mapping table, Twig macro definitions,
-null safety patterns, Super Table `.one()` guidance, and the template editing approach.
+**If LINKFIELD_PRESENT = "yes": read `references/template-migration.md` from this
+skill's directory before starting.** It contains the full API mapping table, Twig
+macro definitions, null safety patterns, and the template editing approach.
+
+If LINKFIELD_PRESENT = "no": skip the DB query, handle mapping, and patcher script
+in step 5.1 below. Apply only the general fixes from Block 1 step 1.8 (e.g.
+`craft.matrixBlocks()` → `craft.entries()`). Then proceed to step 5.2.
 
 ### 5.1 Update all templates from Block 1 step 1.8
 
@@ -496,7 +500,7 @@ result to `DEPLOY.md` in the project root.
 
 Show the generated DEPLOY.md contents to the user. Ask them to review it and
 confirm the deployment steps match their hosting environment before saving.
-Apply any corrections, then write the final version to `DEPLOY.md` in the project root.
+Apply any corrections before finalising.
 
 **STOP. Present DEPLOY.md for review. Await confirmation or corrections.**
 
