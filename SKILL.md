@@ -54,7 +54,7 @@ If that fails with a socket error, retry with:
 mysql -h 127.0.0.1 -u root -e "SELECT 1"
 ```
 Record whichever works (e.g. `MYSQL_CMD: mysql -h 127.0.0.1 -u root`). Flag a
-failed connection as a blocker. This is needed for any diagnostic queries in Block 4.
+failed connection as a blocker. This is used for diagnostic queries in Blocks 4 and 5.
 
 ### 1.3 Plugin inventory
 Read `composer.json`. For every package under `require`, check Packagist for a
@@ -302,7 +302,8 @@ on at least 3-5 entries. Wait for confirmation.**
 
 ## BLOCK 5 — Template updates
 
-Do not proceed if Block 4 was not confirmed complete with CP data verified.
+If LINKFIELD_PRESENT = "yes": do not proceed until Block 4 is confirmed complete with CP data verified.
+If LINKFIELD_PRESENT = "no": Block 4 was skipped — proceed directly.
 
 **Before starting this block, read `references/template-migration.md` from this
 skill's directory.** It contains the full API mapping table, Twig macro definitions,
@@ -481,7 +482,7 @@ Ask the user two questions:
 2. **If LINKFIELD_PRESENT = "yes" only:** Confirm the DB name and MYSQL_CMD alias
    recorded in Block 1.2 (needed for the DB export command in the guide).
 
-Do not ask about deployment method or DB details if LINKFIELD_PRESENT = "no".
+If LINKFIELD_PRESENT = "no", skip question 2 — no DB export is needed.
 
 ### 7.3 Generate DEPLOY.md
 
