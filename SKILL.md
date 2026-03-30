@@ -444,43 +444,193 @@ Produce a structured summary covering:
   - Any `tel` link type rows that were skipped — re-enter as URL links using `tel:+...` prefix
   - Any `asset` link type rows that were skipped (no native equivalent)
   - Any fields where duplicate Super Table handles caused the second field's data to be unmigratable (manual re-entry required)
-- Going Live reminder:
-  The linkfield data migration must run on each remote environment separately —
-  it is not captured in project config. Use the following sequence per environment:
-
-  1. Add MySQL charset vars to `.env` (if MySQL — see Block 2.7)
-  2. Deploy code + run `composer install`
-  3. Run `php craft up` (DB migrations + project-config/apply — this creates the
-     `_v2` fields in the DB and attempts to remove old linkfield fields, but old
-     field records typically survive as zombie entries because the 3.0.0-beta
-     cannot instantiate Craft 4-era field types)
-  4. Run `php craft project-config/apply` (explicit second pass to ensure layouts
-     from the rebuilt project config are fully applied)
-  5. Migrate linkfield data:
-     ```bash
-     php craft my-module/migrate-linkfield/run --dry-run
-     ```
-     If this reports "No Typed Link Fields found", use the direct fallback:
-     ```bash
-     php craft my-module/migrate-linkfield/run-direct --dry-run
-     ```
-     Once the dry-run output looks correct, run live (with `echo "yes" |` prefix).
-     Use whichever command reported fields in the dry-run.
-  6. Remove zombie linkfield field records (if `run-direct` was used):
-     ```bash
-     echo "yes" | php craft my-module/migrate-linkfield/run-direct --cleanup
-     php craft project-config/apply
-     ```
-  7. Remove charset vars from `.env`, then run `php craft db/convert-charset` (MySQL only)
+- Going Live: proceed to Block 7 to generate a production deployment guide.
 
 ---
 
-**STOP. Present the final report. This is the end of the main upgrade process.
-Await any follow-up instructions.**
+**STOP. Present the final report. Ask the user if they are ready to generate
+the production deployment guide (Block 7) before proceeding.**
 
 ---
 
-## BLOCK 7 — Super Table to native Matrix migration (optional)
+## BLOCK 7 — Production Deployment Guide
+
+This block generates a `DEPLOY.md` file in the project root — a standalone,
+project-specific checklist for deploying the Craft 5 upgrade to production.
+Do not attempt to deploy; only generate the guide.
+
+### 7.1 Confirm readiness
+
+Confirm with the user:
+- The local site is fully verified (loads without errors, all upgraded content
+  renders correctly in browser).
+- All code is committed to git, including `modules/`, `config/project/`, and
+  any template changes from Block 5.
+
+If either is not confirmed, stop and wait before proceeding.
+
+### 7.2 Ask for deployment details
+
+Ask the user two questions:
+
+1. **Deployment method:** How is code deployed to production? Examples: `git push`
+   to a remote + SSH, Laravel Forge, Ploi, Deployer, rsync, FTP, hosting panel
+   deploy button, etc. If they are unsure or use a custom workflow, default to
+   generic SSH steps.
+
+2. **If LINKFIELD_PRESENT = "yes" only:** Confirm the DB name and MYSQL_CMD alias
+   recorded in Block 1.2 (needed for the DB export command in the guide).
+
+Do not ask about deployment method or DB details if LINKFIELD_PRESENT = "no".
+
+### 7.3 Generate DEPLOY.md
+
+Write a `DEPLOY.md` file to the project root. Use the correct variant below
+based on LINKFIELD_PRESENT.
+
+---
+
+**Variant A — LINKFIELD_PRESENT = "no": standard code deployment**
+
+No DB push is needed. Craft's migrations and project config carry all changes.
+
+```markdown
+# Craft 5 Production Deployment — [project name]
+Generated [date].
+
+## Upgrade summary
+- Craft version: [version from Block 3.5]
+- Plugins updated: [list from Block 3.3]
+- Templates patched: [list from Block 5, or "none"]
+- fields/auto-merge migration files committed: [yes / no]
+
+## Deployment steps
+
+### 1. Deploy code
+[Deployment command or steps based on their method, e.g.:
+- Forge: trigger deploy via dashboard or `forge deploy <site-id>`
+- Git + SSH: `git push origin main` then `ssh user@host "cd /path && git pull"`
+- Generic SSH: log into server, `cd /path/to/site && git pull origin main`]
+
+### 2. Install dependencies
+```bash
+composer install --no-dev
+```
+
+### 3. Run Craft upgrade
+```bash
+php craft up
+php craft project-config/apply
+```
+
+### 4. Verify
+- [ ] Log into Craft CP — confirm Craft [version] in footer
+- [ ] Browse key page types in browser — confirm no errors
+- [ ] Check logs: `tail -n 50 storage/logs/web.log`
+
+## Rollback
+```bash
+git checkout [craft4-branch]
+composer install --no-dev
+php craft up
+```
+```
+
+---
+
+**Variant B — LINKFIELD_PRESENT = "yes": DB-push deployment**
+
+The linkfield data migration has already run in the local database. The local
+Craft 5 DB must be pushed to production — do not attempt to run migration
+commands on production.
+
+> **Content delta:** this deployment overwrites the production database with the
+> local migrated copy. Any content added to production after the initial local
+> DB snapshot was taken will be lost. Put the site in maintenance mode before
+> pushing the database to prevent a content delta during the deployment window.
+
+```markdown
+# Craft 5 Production Deployment — [project name]
+Generated [date].
+
+## Upgrade summary
+- Craft version: [version from Block 3.5]
+- Linkfield fields migrated: [handles from Block 1.7, e.g. linkUrl → linkUrl_v2]
+- Templates patched: [list from Block 5]
+- fields/auto-merge migration files committed: [yes / no]
+
+## ⚠ Content delta warning
+This deployment replaces the production database with the local migrated database.
+Any content added to production after [date of original local DB snapshot] will be
+overwritten. Put production in maintenance mode before pushing the DB.
+
+## Pre-deployment checklist
+- [ ] Local site fully verified — all linkfield entries display correctly in browser
+- [ ] All code committed (modules/, config/project/, templates, composer.json/lock)
+- [ ] Fresh production DB backup taken and stored safely off-server
+- [ ] Maintenance window communicated to content editors
+
+## Deployment steps
+
+### 1. Export local Craft 5 database
+```bash
+[MYSQL_CMD] [db_name] > ~/Desktop/[project]-craft5-[date].sql
+```
+
+### 2. Enable maintenance mode on production
+[Step based on their deployment method, e.g.:
+- Craft maintenance mode: `php craft utils/repair` or create `storage/maintenance.html`
+- Hosting panel: enable maintenance toggle
+- Generic: add `maintenance` file to web root that returns 503 via .htaccess/nginx]
+
+### 3. Deploy code to production
+[Deployment steps based on their method]
+
+### 4. Install dependencies
+```bash
+composer install --no-dev
+```
+
+### 5. Import migrated database to production
+[DB import steps based on their hosting environment, e.g.:
+- SSH + mysql: `mysql -u user -p db_name < craft5-migrated.sql`
+- Hosting panel: use DB import tool, select the exported .sql file
+- TablePlus / Sequel Pro: connect to production DB and run File > Import]
+
+### 6. Run Craft upgrade
+```bash
+php craft up
+php craft project-config/apply
+```
+
+### 7. Verify
+- [ ] Log into Craft CP — confirm Craft [version] in footer
+- [ ] Open an entry containing field [first _v2 handle] — confirm link renders correctly
+- [ ] Load [a URL from a patched template] in browser — confirm no errors
+- [ ] Check logs: `tail -n 50 storage/logs/web.log`
+
+### 8. Exit maintenance mode
+[Reverse of step 2]
+
+## Rollback
+If anything is wrong, restore the production backup from Pre-deployment step:
+```bash
+[DB import command] < /path/to/craft4-production-backup.sql
+git checkout [craft4-branch] && composer install --no-dev && php craft up
+```
+```
+
+### 7.4 Checkpoint
+
+Show the generated DEPLOY.md contents to the user. Ask them to review it and
+confirm the deployment steps match their hosting environment before saving.
+Apply any corrections, then write the final version to `DEPLOY.md` in the project root.
+
+**STOP. Present DEPLOY.md for review. Await confirmation or corrections.**
+
+---
+
+## BLOCK 8 — Super Table to native Matrix migration (optional)
 
 This block is a separate post-upgrade task. Read `references/supertable-migration.md`
 from this skill's directory for the full instructions before starting.
