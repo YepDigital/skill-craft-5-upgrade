@@ -11,7 +11,7 @@ Read this file before starting Block 5 (Template updates).
 | `field.getUrl()` | `field.url` |
 | `field.getCustomText()` | `field.label` |
 | `field.getTarget()` | `field.target` |
-| `field.getType` | `field.type` |
+| `field.getType()` | `field.type` |
 | `field.getElement()` | `field.element` |
 | `field.getLinkAttributes()` | macro (see below) |
 | `field|length` | `field.url|length` *(manual — not automated by patcher script)* |

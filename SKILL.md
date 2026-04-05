@@ -57,8 +57,12 @@ Record whichever works (e.g. `MYSQL_CMD: mysql -h 127.0.0.1 -u root`). Flag a
 failed connection as a blocker. This is used for diagnostic queries in Blocks 4 and 5.
 
 ### 1.3 Plugin inventory
-Read `composer.json`. For every package under `require`, check Packagist for a
+Read `composer.json`. For every Craft plugin under `require`, check Packagist for a
 Craft 5-compatible release. Flag any missing Craft 5 release as a blocker.
+
+Skip `php`, `ext-*`, and general PHP libraries (e.g. `nesbot/carbon`,
+`guzzlehttp/guzzle`) — these are not Craft plugins and need no Craft 5
+compatibility check.
 
 If Packagist is unreachable or returns errors, ask the user to confirm Craft 5
 compatibility for each plugin manually before proceeding.
@@ -85,8 +89,7 @@ Flag any pending or reserved jobs as a blocker.
 ### 1.7 / 1.7a / 1.8 Audit script
 Run the audit script from the project root:
 ```bash
-bash path/to/this-skill/scripts/audit.sh
-# This skill is at ~/.claude/skills/craft-5-upgrade/
+bash ~/.claude/skills/craft-5-upgrade/scripts/audit.sh
 ```
 This covers all three steps in one pass:
 - **1.7** — linkfield field inventory (handle, name, enabled types, columnSuffix)
@@ -213,6 +216,8 @@ Do not add `--with-all-dependencies` or package-specific flags. If LINKFIELD_PRE
 php craft up
 php craft project-config/apply
 ```
+Note: `php craft --version` is not a valid Craft CLI command and will exit non-zero.
+Use `composer show craftcms/cms | grep -E "^versions"` to confirm the installed version (step 3.5).
 
 ### 3.3 Install any newly added plugins
 `php craft up` (step 3.2) typically installs all plugins automatically. Run
@@ -240,8 +245,6 @@ composer show craftcms/cms | grep -E "^versions"
 ```
 Confirm output shows a 5.x version. Stop if not.
 
-Note: `php craft --version` is not a valid Craft CLI command and will exit non-zero.
-
 ---
 
 **STOP. Report Craft version, all command outputs, current state of `.env` and `composer.json`. Wait for confirmation before Block 4.**
@@ -267,7 +270,7 @@ The following link types have no native Craft 5 equivalent and will not be migra
 | Typed Link Field type | Outcome |
 |---|---|
 | `tel` | Skipped with `[ERROR] Invalid link type: phone`. Re-enter manually as a URL link using a `tel:+...` prefix. |
-| `asset` | Skipped as unmappable. No native equivalent in the Craft 5 Link field. Re-enter manually. |
+| `asset` | Skipped — migration script does not implement asset mapping. Re-enter manually in the CP; native Craft 5 Link fields do support asset links. |
 | `user` | Skipped as unmappable. No native equivalent. |
 
 Count rows of each type per field in the dry-run output. Include these counts in
@@ -317,12 +320,16 @@ in step 5.1 below. Apply only the general fixes from Block 1 step 1.8 (e.g.
 
 **Before building the handle mapping, verify each `_v2` field's name against its
 template context.** Deduplication order is non-deterministic — the field name is
-the only reliable indicator of which handle belongs to which context. Run using
-**MYSQL_CMD** recorded in Block 1.2:
+the only reliable indicator of which handle belongs to which context.
+
+**MySQL only (skip for PostgreSQL):** Run using **MYSQL_CMD** recorded in Block 1.2:
 
 ```bash
 MYSQL_CMD <db_name> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%_v2' ORDER BY handle;"
 ```
+
+**PostgreSQL:** Skip this query. Derive the handle mapping from the Block 1 audit
+output (step 1.7) and confirm field names via the Craft CP field settings.
 
 Cross-reference each handle's name against the template loops from step 1.8.
 For example, if two loops both used `navLink` originally:
@@ -358,6 +365,7 @@ calls for migrated handles.
 
 **Apply manually after the script:**
 - Null guards on all link field accesses (see `references/template-migration.md`)
+- `field|length` → `field.url|length` checks (patcher does not handle these)
 - Templates with multiple loops needing different per-loop handles (script cannot
   distinguish which loop uses which deduplicated handle — split and patch manually)
 - Super Table `.one()` patterns
@@ -483,10 +491,11 @@ Ask the user two questions:
    deploy button, etc. If they are unsure or use a custom workflow, default to
    generic SSH steps.
 
-2. **If LINKFIELD_PRESENT = "yes" only:** Confirm the DB name and MYSQL_CMD alias
-   recorded in Block 1.2 (needed for the DB export command in the guide).
+If LINKFIELD_PRESENT = "no", skip question 2.
 
-If LINKFIELD_PRESENT = "no", skip question 2 — no DB export is needed.
+2. **If LINKFIELD_PRESENT = "yes" only:** Use the DB name and MYSQL_CMD alias
+   recorded in Block 1.2 when filling in the DB export command in the guide.
+   No need to ask the user — these were established at the start of the session.
 
 ### 7.3 Generate DEPLOY.md
 
