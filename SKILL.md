@@ -21,7 +21,6 @@ and wait for explicit confirmation before proceeding to the next block.**
 ## Global rules
 
 - Never run destructive commands (composer changes, database writes, file edits) outside the block they are designated to.
-- Never skip a STOP checkpoint. Each block ends with an explicit stop requiring user confirmation before continuing.
 - If any command exits non-zero: stop, report the full output, wait for instructions.
 - Report all command output. Report all file edits with diffs for non-trivial changes.
 - Minimal changes only. Do not refactor, reformat, or improve code beyond what the upgrade strictly requires.
@@ -104,17 +103,14 @@ Duplicate handles will be globally deduplicated after upgrade (handle → handle
 handle3...). The exact mapping is non-deterministic from config alone — confirm via
 the CP or a DB query after the upgrade.
 
-**Data loss risk when a duplicated handle also carries linkfield data:**
-`getAllFields()` only surfaces one field instance per handle. If two Super Table
-block types share a handle and both contain linkfield data, only one field's data
-will be migrated. Flag this prominently and warn the user that the affected entries
-will need manual re-entry. There is no automated resolution.
+**Data loss risk — duplicated handle with linkfield data:** `getAllFields()` surfaces
+only one field instance per handle, so if two Super Table block types share a handle
+and both carry linkfield data, only one field's data will be migrated. Flag this and
+warn the user that affected entries need manual re-entry; there is no automated fix.
 
 **After running, note for step 1.8:**
-Cross-reference all `.with([` matches against the linkfield handles from 1.7.
-Any `.with()` call that includes a linkfield handle must be removed after migration —
-native Link fields cannot be eager-loaded (returns `ElementCollection` instead of
-`LinkData`, breaking `.url` / `.label` / `.type` access).
+Cross-reference `.with([` matches against the linkfield handles from 1.7. Any `.with()` call
+on a migrated handle must be removed — see `references/template-migration.md` for why.
 
 ### 1.9 Template extension collisions
 Search `templates/` for directories containing both a `.twig` and `.html` file
@@ -228,10 +224,8 @@ If any plugin is missing, install it:
 php craft plugin/install <handle>
 ```
 
-Note: plugin handles often differ from Composer package names (e.g.
-`carlcs/craft-uielementfields` installs as handle `ui-element-fields`).
-Always derive the correct handle from `php craft plugin/list` output rather
-than guessing from the package name.
+Note: plugin handles often differ from package names — always derive the handle
+from `php craft plugin/list` rather than guessing.
 
 ### 3.4 MySQL charset conversion (MySQL only)
 Remove `CRAFT_DB_CHARSET` and `CRAFT_DB_COLLATION` from `.env` (and from `config/db.php` if present). Then run:
@@ -347,13 +341,10 @@ counterpart:
 
 Run the template patcher in dry-run mode first, review the diffs, then apply:
 ```bash
-# Dry run
 python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
   --files templates/_components/buttons/single.twig templates/_partials/ctas.twig \
   --dry-run
-
-# Apply
 python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
   --files templates/_components/buttons/single.twig templates/_partials/ctas.twig
@@ -371,11 +362,10 @@ calls for migrated handles.
 - Super Table `.one()` patterns
 - `craft.matrixBlocks()` → `craft.entries()` replacements
 
-Do not refactor, reformat, or change anything beyond what the migration requires.
-Minimal diff only.
+Do not refactor, reformat, or change anything beyond what the migration requires. Minimal diff only.
 
 ### 5.2 Report all changes
-List every file modified with a summary of changes. Show diffs for non-trivial files.
+List every file modified with a summary of changes; show diffs for non-trivial files.
 
 ---
 
@@ -406,9 +396,6 @@ Skip if no Redactor fields exist.
 echo "yes" | php craft my-module/migrate-linkfield/run --cleanup
 composer remove sebastianlenz/linkfield --no-interaction
 ```
-The cleanup command prompts "Have you taken a database backup?" and defaults to "no",
-so pipe `yes` to pass it non-interactively (same as the live migration in Block 4).
-
 If `run --cleanup` reports "No Typed Link Fields found", the 3.0.0-beta cannot
 instantiate the old field types in this environment. Use the direct fallback instead:
 ```bash
@@ -468,8 +455,7 @@ the production deployment guide (Block 7) before proceeding.**
 
 ## BLOCK 7 — Production Deployment Guide
 
-This block generates a `DEPLOY.md` file in the project root — a standalone,
-project-specific checklist for deploying the Craft 5 upgrade to production.
+This block generates a project-specific `DEPLOY.md` in the project root.
 Do not attempt to deploy; only generate the guide.
 
 ### 7.1 Confirm readiness
@@ -480,22 +466,14 @@ Confirm with the user:
 - All code is committed to git, including `modules/`, `config/project/`, and
   any template changes from Block 5.
 
-If either is not confirmed, stop and wait before proceeding.
-
 ### 7.2 Ask for deployment details
 
-Ask the user two questions:
+Ask: **How is code deployed to production?** (examples: `git push` to remote + SSH,
+Laravel Forge, Ploi, Deployer, rsync, FTP, hosting panel). If unsure, default to
+generic SSH steps.
 
-1. **Deployment method:** How is code deployed to production? Examples: `git push`
-   to a remote + SSH, Laravel Forge, Ploi, Deployer, rsync, FTP, hosting panel
-   deploy button, etc. If they are unsure or use a custom workflow, default to
-   generic SSH steps.
-
-If LINKFIELD_PRESENT = "no", skip question 2.
-
-2. **If LINKFIELD_PRESENT = "yes" only:** Use the DB name and MYSQL_CMD alias
-   recorded in Block 1.2 when filling in the DB export command in the guide.
-   No need to ask the user — these were established at the start of the session.
+If LINKFIELD_PRESENT = "yes": use the DB name and MYSQL_CMD from Block 1.2 when
+filling in the DB export command — no need to ask the user again.
 
 ### 7.3 Generate DEPLOY.md
 
@@ -507,9 +485,8 @@ result to `DEPLOY.md` in the project root.
 
 ### 7.4 Checkpoint
 
-Show the generated DEPLOY.md contents to the user. Ask them to review it and
-confirm the deployment steps match their hosting environment before saving.
-Apply any corrections before finalising.
+Show the generated DEPLOY.md to the user. Ask them to confirm the steps match their
+hosting environment and apply any corrections before finalising.
 
 **STOP. Present DEPLOY.md for review. Await confirmation or corrections.**
 
