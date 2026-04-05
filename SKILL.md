@@ -41,7 +41,7 @@ Record both. Flag PHP below 8.2 as a blocker. Do not attempt to detect these
 automatically; user-provided values are more reliable.
 
 ### 1.2 Database engine
-Check `.env` and `config/db.php` for `CRAFT_DB_DRIVER`. Record MySQL or PostgreSQL.
+Check `.env` and `config/db.php` for `CRAFT_DB_DRIVER`. Confirm MySQL is in use.
 Record any existing `CRAFT_DB_CHARSET` / `CRAFT_DB_COLLATION` values.
 
 If MySQL, test the connection now and record the working form as **MYSQL_CMD**:
@@ -185,7 +185,7 @@ Add them now if not already present. **These must be removed in Block 6 once
 `sebastianlenz/linkfield` has been removed from the project.** Note their presence
 in your Block 2 report so Block 6 includes the removal step.
 
-### 2.7 MySQL charset vars (MySQL only, skip for PostgreSQL)
+### 2.7 MySQL charset vars
 If `CRAFT_DB_CHARSET` is not already set in `.env`, add:
 ```
 CRAFT_DB_CHARSET="utf8mb3"
@@ -316,14 +316,11 @@ in step 5.1 below. Apply only the general fixes from Block 1 step 1.8 (e.g.
 template context.** Deduplication order is non-deterministic — the field name is
 the only reliable indicator of which handle belongs to which context.
 
-**MySQL only (skip for PostgreSQL):** Run using **MYSQL_CMD** recorded in Block 1.2:
+Run using **MYSQL_CMD** recorded in Block 1.2:
 
 ```bash
 MYSQL_CMD <db_name> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%_v2' ORDER BY handle;"
 ```
-
-**PostgreSQL:** Skip this query. Derive the handle mapping from the Block 1 audit
-output (step 1.7) and confirm field names via the Craft CP field settings.
 
 Cross-reference each handle's name against the template loops from step 1.8.
 For example, if two loops both used `navLink` originally:
