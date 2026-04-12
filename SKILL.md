@@ -1,5 +1,5 @@
 ---
-name: craft5-upgrade
+name: craft-5-upgrade
 description: "Use this skill when the user wants to upgrade a Craft CMS 4 project to Craft CMS 5. Triggers include: any mention of 'upgrade to Craft 5', 'Craft 4 to 5', 'Craft 5 upgrade', 'Typed Link Field migration', 'sebastianlenz/linkfield', 'linkfield to native Link field', 'Craft 5 migration', or requests to migrate a Craft CMS project to the latest major version. This skill handles the full upgrade process including pre-upgrade preparation, composer changes, the Craft 5 database upgrade, and migration of the sebastianlenz/linkfield (Typed Link Field) plugin to Craft 5's native Link field. Also use when the user asks about migrating Super Table fields to native Matrix in Craft 5. Do NOT use for Craft 3 upgrades, general Craft CMS development, or plugin development unrelated to the upgrade."
 disable-model-invocation: true
 ---
