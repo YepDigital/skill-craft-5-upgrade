@@ -21,6 +21,8 @@ and wait for explicit confirmation before proceeding to the next block.**
 
 ## Global rules
 
+Update when the user flags issues. Read before every run:
+
 - Never run destructive commands (composer changes, database writes, file edits) outside the block they are designated to.
 - If any command exits non-zero: stop, report the full output, wait for instructions.
 - Report all command output. Report all file edits with diffs for non-trivial changes.
