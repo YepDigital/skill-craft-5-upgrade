@@ -15,6 +15,17 @@ use yii\helpers\Console;
  *
  * Usage:
  *   php craft my-module/migrate-linkfield/run [--dry-run] [--cleanup] [--field=handle] [--suffix=_v2]
+ *   php craft my-module/migrate-linkfield/run-direct [--dry-run] [--cleanup] [--field=handle] [--suffix=_v2]
+ *
+ * Recommended path: run-direct
+ *   Bypasses plugin field instantiation entirely — works when sebastianlenz/linkfield
+ *   3.0.0-beta cannot instantiate Craft 4-era field settings. Discovers old fields via
+ *   direct DB query, auto-creates missing _v2 native Link fields from raw settings JSON,
+ *   then migrates all element data. Safe to re-run (idempotent per element).
+ *
+ * Fallback path: run
+ *   Uses the plugin's own field instantiation to discover fields, create _v2 fields,
+ *   and migrate data. Use if run-direct reports no fields in the DB.
  */
 class MigrateLinkfieldController extends Controller
 {
@@ -59,6 +70,7 @@ class MigrateLinkfieldController extends Controller
 
     /**
      * Audit, then migrate Typed Link Field data to native Craft 5 Link fields.
+     * Fallback path — use run-direct instead if this reports "No Typed Link Fields found."
      */
     public function actionRun(): int
     {
@@ -70,6 +82,8 @@ class MigrateLinkfieldController extends Controller
 
         if (empty($sourceFields)) {
             $this->stdout("No Typed Link Fields found. Nothing to do.\n", Console::FG_GREEN);
+            $this->stdout("(If fields exist but are not found, the beta plugin may not be able\n");
+            $this->stdout("to instantiate Craft 4 field settings. Try: run-direct instead.)\n", Console::FG_YELLOW);
             return ExitCode::OK;
         }
 
@@ -131,30 +145,36 @@ class MigrateLinkfieldController extends Controller
     }
 
     /**
-     * Migrate linkfield data using direct DB discovery — bypasses plugin field
-     * instantiation. Use this on production when `sebastianlenz/linkfield 3.0.0-beta`
-     * cannot instantiate Craft 4-era field types, causing `run` to report
-     * "No Typed Link Fields found."
+     * Recommended path. Discovers old fields and auto-creates _v2 native Link fields
+     * via direct DB queries — bypasses plugin field instantiation entirely.
      *
-     * Requires project-config/apply to have already run so the *_v2 target fields
-     * exist in the DB. Old linkfield entries remain in the fields table as zombie
-     * records (Craft cannot delete them without the plugin class), which this action
-     * uses for discovery.
+     * Works when sebastianlenz/linkfield 3.0.0-beta cannot instantiate Craft 4-era
+     * field settings (causing `run` to report "No Typed Link Fields found").
      *
-     * Use --cleanup to delete those zombie field records after migration.
+     * Auto-creates _v2 native fields from the raw settings JSON if they do not
+     * already exist. Safe to re-run: existing _v2 field values are overwritten
+     * (idempotent per element).
+     *
+     * Use --cleanup to delete old zombie field records after migration.
+     *
+     * Note: field layout insertion is attempted but may silently skip if the old
+     * field type cannot be instantiated. After migration, verify that _v2 fields
+     * appear in entry type layouts in the CP; add manually if missing.
      */
     public function actionRunDirect(): int
     {
         $this->stdout("\n=== Typed Link Field → Native Link Migration (direct DB mode) ===\n", Console::FG_CYAN, Console::BOLD);
-        $this->stdout("Discovering fields via DB query (bypasses plugin field instantiation).\n\n");
+        $this->stdout("Discovering fields and creating targets via DB (bypasses plugin instantiation).\n\n");
 
         $oldFields = Craft::$app->getDb()->createCommand(
-            'SELECT [[id]], [[handle]] FROM {{%fields}} WHERE [[type]] = :type',
+            'SELECT [[id]], [[handle]], [[name]], [[settings]] FROM {{%fields}} WHERE [[type]] = :type',
             [':type' => 'lenz\linkfield\fields\LinkField']
         )->queryAll();
 
         if (empty($oldFields)) {
             $this->stdout("No Typed Link Field entries found in fields table. Nothing to do.\n", Console::FG_GREEN);
+            $this->stdout("(If you expected fields, check that sebastianlenz/linkfield was\n");
+            $this->stdout("installed before the upgrade. Try: run instead.)\n", Console::FG_YELLOW);
             return ExitCode::OK;
         }
 
@@ -163,22 +183,33 @@ class MigrateLinkfieldController extends Controller
             if ($this->field !== null && $row['handle'] !== $this->field) {
                 continue;
             }
+
             $newHandle = $row['handle'] . $this->suffix;
-            $newField  = Craft::$app->getFields()->getFieldByHandle($newHandle);
-            $count     = (int) Craft::$app->getDb()->createCommand(
+
+            // Auto-create _v2 native field if it does not already exist.
+            $newField = $this->ensureNativeLinkFieldFromSettings(
+                (int)$row['id'],
+                $row['handle'],
+                $row['name'],
+                $row['settings']
+            );
+
+            $count = (int) Craft::$app->getDb()->createCommand(
                 'SELECT COUNT(DISTINCT [[elementId]]) FROM {{%lenz_linkfield}} WHERE [[fieldId]] = :fieldId',
                 [':fieldId' => $row['id']]
             )->queryScalar();
 
-            $found = $newField instanceof NativeLinkField;
-            $this->stdout(sprintf(
-                "  ID %-5s %-28s → %-28s  rows: %-6s  [%s]\n",
-                $row['id'], $row['handle'], $newHandle, $count,
-                $found ? 'OK' : 'TARGET NOT FOUND — run project-config/apply first'
-            ));
-
-            if ($found) {
+            if ($newField instanceof NativeLinkField) {
+                $this->stdout(sprintf(
+                    "  ID %-5s %-28s → %-28s  rows: %-6s  [OK]\n",
+                    $row['id'], $row['handle'], $newHandle, $count
+                ));
                 $plan[(int)$row['id']] = ['handle' => $row['handle'], 'newField' => $newField];
+            } else {
+                $this->stdout(sprintf(
+                    "  ID %-5s %-28s → %-28s  rows: %-6s  [ERROR — could not create target]\n",
+                    $row['id'], $row['handle'], $newHandle, $count
+                ), Console::FG_RED);
             }
         }
 
@@ -188,7 +219,7 @@ class MigrateLinkfieldController extends Controller
         }
 
         if (empty($plan)) {
-            $this->stderr("\nNo target fields found. Run `php craft project-config/apply` first, then retry.\n", Console::FG_RED);
+            $this->stderr("\nNo target fields could be created. See errors above.\n", Console::FG_RED);
             return ExitCode::UNSPECIFIED_ERROR;
         }
 
@@ -220,15 +251,7 @@ class MigrateLinkfieldController extends Controller
 
             if ($this->cleanup) {
                 $this->stdout("  [Cleanup] Deleting zombie field '{$info['handle']}' (ID: {$oldId})...\n", Console::FG_YELLOW);
-                $field = Craft::$app->getFields()->getFieldById($oldId);
-                if ($field) {
-                    Craft::$app->getFields()->deleteField($field);
-                } else {
-                    // Field class uninstantiable — remove the DB row directly
-                    Craft::$app->getDb()->createCommand()
-                        ->delete('{{%fields}}', ['id' => $oldId])
-                        ->execute();
-                }
+                $this->deleteFieldById($oldId);
             }
         }
 
@@ -294,7 +317,7 @@ class MigrateLinkfieldController extends Controller
     }
 
     // -------------------------------------------------------------------------
-    // Native field creation
+    // Native field creation — plugin-instantiation path (actionRun)
     // -------------------------------------------------------------------------
 
     private function ensureNativeLinkField(
@@ -305,7 +328,6 @@ class MigrateLinkfieldController extends Controller
 
         $existing = $fieldsService->getFieldByHandle($newHandle);
         if ($existing instanceof NativeLinkField) {
-            // Ensure target support is enabled on already-created fields
             if (!in_array('target', $existing->advancedFields ?? [], true)) {
                 $existing->advancedFields = array_merge($existing->advancedFields ?? [], ['target']);
                 $fieldsService->saveField($existing);
@@ -320,11 +342,8 @@ class MigrateLinkfieldController extends Controller
             'handle'            => $newHandle,
             'instructions'      => $oldField->instructions ?? '',
             'translationMethod' => $oldField->translationMethod,
-            // 'types' is the correct Craft 5 property name (not 'allowedLinkTypes')
             'types'             => $this->resolveEnabledTypes($oldField),
-            // 'advancedFields' enables target (_blank) support for migrated values
             'advancedFields'    => ['target'],
-            // Note: 'groupId' is intentionally omitted — field groups were removed in Craft 5
         ]);
 
         if (!$fieldsService->saveField($newField)) {
@@ -337,10 +356,81 @@ class MigrateLinkfieldController extends Controller
     }
 
     /**
-     * Resolve the enabled link types from the old field's settings.
-     * Maps Typed Link Field type names to Craft 5 native Link field type names.
+     * Resolve enabled link types from the typed field object's settings.
+     * Used by actionRun (plugin-instantiation path).
      */
     private function resolveEnabledTypes(\lenz\linkfield\fields\LinkField $oldField): array
+    {
+        $settings = [];
+        try {
+            $settings = $oldField->getSettings();
+        } catch (\Throwable) {
+        }
+        return $this->resolveEnabledTypesFromSettings(is_array($settings) ? $settings : []);
+    }
+
+    // -------------------------------------------------------------------------
+    // Native field creation — direct DB path (actionRunDirect)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Find or create the _v2 native Link field using raw DB data.
+     * Does not require the old field type to be instantiable.
+     */
+    private function ensureNativeLinkFieldFromSettings(
+        int $oldId,
+        string $oldHandle,
+        string $name,
+        ?string $settingsJson
+    ): ?NativeLinkField {
+        $newHandle    = $oldHandle . $this->suffix;
+        $fieldsService = Craft::$app->getFields();
+
+        $existing = $fieldsService->getFieldByHandle($newHandle);
+        if ($existing instanceof NativeLinkField) {
+            if (!in_array('target', $existing->advancedFields ?? [], true)) {
+                $existing->advancedFields = array_merge($existing->advancedFields ?? [], ['target']);
+                $fieldsService->saveField($existing);
+                $this->stdout("  Updated '{$newHandle}' to enable target support.\n");
+            }
+            $this->stdout("  Native field '{$newHandle}' already exists. Reusing.\n");
+            return $existing;
+        }
+
+        $settings = $settingsJson ? Json::decodeIfJson($settingsJson) : [];
+        $newField = new NativeLinkField([
+            'name'           => $name,
+            'handle'         => $newHandle,
+            'types'          => $this->resolveEnabledTypesFromSettings(is_array($settings) ? $settings : []),
+            'advancedFields' => ['target'],
+        ]);
+
+        if (!$fieldsService->saveField($newField)) {
+            $this->stderr(
+                "  [ERROR] Could not create '{$newHandle}': " .
+                implode(', ', $newField->getFirstErrors()) . "\n",
+                Console::FG_RED
+            );
+            return null;
+        }
+
+        $this->stdout("  Created native Link field '{$newHandle}' (id: {$newField->id}).\n");
+
+        // Attempt layout insertion. This may silently skip if the old field
+        // type cannot be instantiated (getField() returns null for unregistered
+        // types). If _v2 fields are not visible in CP layouts after migration,
+        // add them manually via the entry type editor.
+        $this->addFieldToLayoutsById($oldId, $newField);
+
+        return $newField;
+    }
+
+    /**
+     * Resolve enabled link types from raw settings JSON.
+     * Used by both ensureNativeLinkField (via resolveEnabledTypes) and
+     * ensureNativeLinkFieldFromSettings.
+     */
+    private function resolveEnabledTypesFromSettings(?array $settings): array
     {
         $typeMap = [
             'url'      => 'url',
@@ -354,21 +444,18 @@ class MigrateLinkfieldController extends Controller
             'site'     => 'site',
         ];
 
-        $enabled = [];
-        try {
-            $allowedNames = $oldField->getSettings()['allowedLinkNames'] ?? null;
-            if (is_array($allowedNames)) {
-                foreach ($allowedNames as $name) {
-                    $mapped = $typeMap[$name] ?? null;
-                    if ($mapped && !in_array($mapped, $enabled, true)) {
-                        $enabled[] = $mapped;
-                    }
-                }
-            }
-        } catch (\Throwable) {
-            // Fall back to a sensible default
+        $allowedNames = $settings['allowedLinkNames'] ?? null;
+        if (!is_array($allowedNames)) {
+            return ['url', 'entry', 'asset', 'email'];
         }
 
+        $enabled = [];
+        foreach ($allowedNames as $name) {
+            $mapped = $typeMap[$name] ?? null;
+            if ($mapped && !in_array($mapped, $enabled, true)) {
+                $enabled[] = $mapped;
+            }
+        }
         return $enabled ?: ['url', 'entry', 'asset', 'email'];
     }
 
@@ -378,7 +465,7 @@ class MigrateLinkfieldController extends Controller
 
     /**
      * Insert the new native Link field adjacent to the old field in every
-     * field layout that contains the old field.
+     * field layout that contains the old field (plugin-instantiation path).
      *
      * Uses Craft 5's FieldLayout OO API. The fieldlayoutfields table was
      * removed in Craft 5 — do not query it directly.
@@ -387,6 +474,20 @@ class MigrateLinkfieldController extends Controller
         \lenz\linkfield\fields\LinkField $oldField,
         NativeLinkField $newField
     ): void {
+        $this->addFieldToLayoutsById($oldField->id, $newField);
+    }
+
+    /**
+     * Insert the new native Link field adjacent to the old field in every
+     * layout that contains the old field's ID. Used by the direct DB path
+     * where the old field object cannot be instantiated.
+     *
+     * If the old field type is unregistered, getField() returns null for
+     * its layout elements, so insertion silently skips. The _v2 field will
+     * need to be added to entry type layouts manually in the CP.
+     */
+    private function addFieldToLayoutsById(int $oldFieldId, NativeLinkField $newField): void
+    {
         $fieldsService = Craft::$app->getFields();
         $modified = 0;
 
@@ -400,7 +501,7 @@ class MigrateLinkfieldController extends Controller
                 foreach ($elements as $el) {
                     if (!($el instanceof CustomField)) continue;
                     $f = $el->getField();
-                    if ($f?->id === $oldField->id) $hasOld = true;
+                    if ($f?->id === $oldFieldId)   $hasOld = true;
                     if ($f?->id === $newField->id) $hasNew = true;
                 }
 
@@ -409,9 +510,7 @@ class MigrateLinkfieldController extends Controller
                 $newElements = [];
                 foreach ($elements as $el) {
                     $newElements[] = $el;
-                    // Insert new field immediately after old field
-                    if ($el instanceof CustomField && $el->getField()?->id === $oldField->id) {
-                        // Correct Craft 5 constructor: new CustomField($fieldInstance)
+                    if ($el instanceof CustomField && $el->getField()?->id === $oldFieldId) {
                         $newElements[] = new CustomField($newField);
                     }
                 }
@@ -582,6 +681,22 @@ class MigrateLinkfieldController extends Controller
         if (!Craft::$app->getFields()->deleteField($field)) {
             $this->stderr("  [ERROR] Could not delete field '{$field->handle}'.\n", Console::FG_RED);
         }
+    }
+
+    /**
+     * Delete a field by ID, falling back to direct DB delete if the field
+     * type cannot be instantiated (zombie field after plugin removal).
+     */
+    private function deleteFieldById(int $fieldId): void
+    {
+        $field = Craft::$app->getFields()->getFieldById($fieldId);
+        if ($field && Craft::$app->getFields()->deleteField($field)) {
+            return;
+        }
+        // Field uninstantiable or deleteField failed — remove DB row directly.
+        Craft::$app->getDb()->createCommand()
+            ->delete('{{%fields}}', ['id' => $fieldId])
+            ->execute();
     }
 
     /**

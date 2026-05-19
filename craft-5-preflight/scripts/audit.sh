@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Craft 4 to 5 upgrade audit script
-# Run from the project root: bash path/to/skill/scripts/audit.sh
-# Covers SKILL.md steps 1.7, 1.7a, and 1.8
+# Craft 5 preflight audit script
+# Run from the project root: bash ~/.claude/skills/craft-5-preflight/scripts/audit.sh
+# Covers craft-5-preflight SKILL.md blocks P1.7, P1.7a, and P1.8
 # If grep is unavailable or the script fails, perform each section manually per SKILL.md.
 
 set -euo pipefail
@@ -18,9 +18,9 @@ found()   { echo "  [FOUND] $*"; }
 none()    { echo "  (none)"; }
 
 # ─────────────────────────────────────────────
-# 1.7 Linkfield field inventory
+# P1.7 Linkfield field inventory
 # ─────────────────────────────────────────────
-section "1.7 LINKFIELD FIELDS (lenz\\linkfield\\fields\\LinkField)"
+section "P1.7 LINKFIELD FIELDS (lenz\\linkfield\\fields\\LinkField)"
 
 if [ ! -d "$CONFIG_DIR" ]; then
   echo "  [WARN] $CONFIG_DIR not found — skipping"
@@ -48,9 +48,9 @@ else
 fi
 
 # ─────────────────────────────────────────────
-# 1.7a Super Table duplicate field handles
+# P1.7a Super Table duplicate field handles
 # ─────────────────────────────────────────────
-section "1.7a SUPER TABLE DUPLICATE FIELD HANDLES"
+section "P1.7a SUPER TABLE DUPLICATE FIELD HANDLES"
 
 if [ ! -d "$CONFIG_DIR" ]; then
   echo "  [WARN] $CONFIG_DIR not found — skipping"
@@ -87,9 +87,9 @@ else
 fi
 
 # ─────────────────────────────────────────────
-# 1.8 Template deprecated API usage
+# P1.8 Template deprecated API usage
 # ─────────────────────────────────────────────
-section "1.8 TEMPLATE DEPRECATED API CALLS"
+section "P1.8 TEMPLATE DEPRECATED API CALLS"
 
 if [ ! -d "$TEMPLATES_DIR" ]; then
   echo "  [WARN] $TEMPLATES_DIR not found — skipping"
@@ -118,17 +118,17 @@ else
 fi
 
 # ─────────────────────────────────────────────
-# 1.8 Template .with() calls (check for linkfield handles)
+# P1.8 Template .with() calls (check for linkfield handles)
 # ─────────────────────────────────────────────
-section "1.8 TEMPLATE .with() CALLS (check for linkfield handles)"
+section "P1.8 TEMPLATE .with() CALLS (check for linkfield handles)"
 
 if [ ! -d "$TEMPLATES_DIR" ]; then
   echo "  [WARN] $TEMPLATES_DIR not found — skipping"
 else
   results=$(grep -rn --include="*.twig" --include="*.html" -F ".with([" "$TEMPLATES_DIR" 2>/dev/null || true)
   if [ -n "$results" ]; then
-    echo "  Cross-reference these against the linkfield handles from step 1.7."
-    echo "  Any .with() call that includes a linkfield handle must be removed after migration."
+    echo "  Cross-reference these against the linkfield handles from block P1.7."
+    echo "  Any .with() call that includes a linkfield handle must be removed in craft-5-linkfield Block L3."
     echo
     echo "$results" | sed 's/^/  /'
   else
