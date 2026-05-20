@@ -13,7 +13,7 @@ Read this file before starting Block L3 (Template updates).
 | `field.getTarget()` | `field.target` |
 | `field.getType()` | `field.type` |
 | `field.getElement()` | `field.element` |
-| `field.getLinkAttributes()` | macro (see below) |
+| `field.getLinkAttributes()` | inline `href`/`target` (see below) or macro |
 | `field\|length` | `field.url\|length` *(manual — not automated by patcher script)* |
 | `craft.matrixBlocks()` | `craft.entries()` |
 
@@ -44,7 +44,25 @@ strings with no error.
 
 ---
 
-## `getLinkAttributes()` replacement macro
+## `getLinkAttributes()` replacement
+
+The patcher replaces `<expr>.getLinkAttributes()` with inline attributes by
+default (`--linkattributes-mode inline`, the default):
+
+```twig
+{# Before #}
+<a {{ entry.myLink_v2.getLinkAttributes() }}>
+
+{# After (inline mode) #}
+<a href="{{ entry.myLink_v2.url }}"{% if entry.myLink_v2.target %} target="{{ entry.myLink_v2.target }}" rel="noopener noreferrer"{% endif %}>
+```
+
+Use `--linkattributes-mode macro` to emit `{{ linkField.attributes(entry.myLink_v2) }}`
+instead. You must then import the macro file wherever it is used.
+
+---
+
+## `getLinkAttributes()` macro (if using `--linkattributes-mode macro`)
 
 If `templates/_macros/linkField.twig` does not already exist, create it:
 
@@ -157,13 +175,15 @@ Always call `.one()` before accessing sub-fields:
 ## Template editing approach
 
 **Use the patcher script first** (`scripts/patch-templates.py`).
-It handles API substitutions, handle renames, and `.with()` removal automatically.
+It handles API substitutions, handle renames, `.with()` removal, and
+`getLinkAttributes()` replacement automatically.
 
-Apply the following manually after the script (the patcher cannot handle these):
-- Null guards on all link field accesses
-- `field|length` → `field.url|length` checks
-- `craft.matrixBlocks()` → `craft.entries()` replacements
-- Super Table `.one()` patterns
+Run the patcher, then apply the following manually (or use the opts listed):
+- `--null-guards` — applies the four null-guard patterns (see Null-guard recipes below)
+- `field|length` → `field.url|length` *(manual — not automated)*
+- `craft.matrixBlocks()` → `craft.entries()` *(manual)*
+- Super Table `.one()` patterns *(manual)*
+- Twig 2→3 syntax issues — run `--lint-only` first to find them *(manual fix)*
 
 For any manual edits, use Python string replacement rather than the Edit tool's
 `old_str` matching. Tab-indented Twig files can cause `old_str` matching to
@@ -211,3 +231,89 @@ open(path, 'w').write(top + delimiter + bottom)
 
 Confirm the delimiter appears exactly once between the two loops before
 splitting.
+
+---
+
+## Null-guard recipes (`--null-guards`)
+
+Pass `--null-guards` to the patcher to apply these four transforms automatically.
+They run after handle renames so they target the `_v2` forms.
+
+### 1. Type check without null guard
+
+```twig
+{# Before — throws if myLink_v2 is null #}
+{% if myLink_v2.type == "entry" %}
+
+{# After #}
+{% if myLink_v2 and myLink_v2.type == "entry" %}
+```
+
+### 2. `href` in `elseif` branch
+
+```twig
+{# Before — the elseif fires precisely when myLink_v2 is null #}
+{% elseif someTitle|length %}
+  <a href="{{ myLink_v2.url }}">
+
+{# After #}
+  <a href="{{ myLink_v2 ? myLink_v2.url : '#' }}">
+```
+
+### 3. Chained `??` with element attribute
+
+```twig
+{# Before — throws if element is null #}
+{{ fallback ?? myLink_v2.element.title ?? null }}
+
+{# After #}
+{{ fallback ?? (myLink_v2.element ? myLink_v2.element.title : null) }}
+```
+
+### 4. Slug comparison through element
+
+```twig
+{# Before — throws if element is null #}
+{% if entry.slug == myLink_v2.element.slug %}
+
+{# After #}
+{% if myLink_v2.element and (entry.slug == myLink_v2.element.slug) %}
+```
+
+---
+
+## Twig 2 → 3 syntax tightening
+
+Several Twig patterns that compiled fine under Craft 4 / Twig 2 throw
+`Twig\Error\SyntaxError: The "defined" test only works with simple variables`
+under Craft 5 / Twig 3.
+
+Run `--lint-only` before patching to find these in your template files.
+
+### Parenthesised LHS of `??`
+
+```twig
+{# Twig 2: valid.  Twig 3: SyntaxError #}
+{% set isActive = (entry.slug == link.element.slug) ?? null %}
+{{ A ?? (B ? C : null) ?? null }}
+```
+
+**Fix:** strip the trailing `?? null` (it's redundant — `??` already falls back
+to `null`) or rewrite without parenthesised LHS:
+
+```twig
+{# Correct #}
+{% set isActive = link.element and (entry.slug == link.element.slug) %}
+{{ A ?? (B ? C : null) }}
+```
+
+The patcher's `--lint-only` mode greps for `) ?? null` and `) ?? (` patterns
+so you can find all instances before patching.
+
+### `null.attribute` access
+
+Twig 3 is stricter about attribute access on null — the error surface is the
+same as Twig 2, but null guards were often omitted because the old Typed Link
+Field returned an empty object (not `null`) on empty fields. After migration,
+every link field access that was previously safe needs a null guard.
+Use the Null-guard recipes above or `--null-guards` to apply them in bulk.

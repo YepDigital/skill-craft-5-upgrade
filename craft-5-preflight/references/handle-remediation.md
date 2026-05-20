@@ -136,13 +136,42 @@ of the project.
 
 ---
 
-## Handles that are NOT duplicates
+## Handles that are NOT duplicates (within Super Table scope)
 
-The audit (`P1.7a`) reports handles duplicated across Super Table block types.
+The P1.7a audit reports handles duplicated across Super Table block types.
 It does NOT flag handles that appear in the same block type (only one instance
-per handle per block type is allowed by Craft). It also does NOT flag handles
-that happen to match in different, unrelated Super Table fields — those are
-independent fields and Craft does not deduplicate them.
+per handle per block type is allowed by Craft).
 
-Check the audit output carefully: duplicates are listed with the YAML file path
+It also does NOT flag handles that appear in separate, unrelated Super Table
+fields — those are independent DB rows and Craft does not deduplicate them.
+
+Check the audit output carefully: each duplicate entry includes the ST field
+name and block type name so you can see exactly which pairings need renaming.
+
+---
+
+## Non-ST duplicate linkfield handles (P1.7b)
+
+P1.7b flags linkfield handles that appear in multiple *non-ST* contexts:
+top-level fields, Matrix block sub-fields, or both.
+
+**The risk is the same as ST duplicates** — the `craft-5-linkfield` migrator
+calls `getAllFields()` which deduplicates by handle. If `linkTo` appears as
+both a top-level field and a Matrix block sub-field, only one will be returned,
+and one context's data will not be migrated.
+
+**Why P2 does not remediate these:** renaming a top-level linkfield handle
+on Craft 4 is safe but requires updating all field layout YAML and templates.
+The same pattern as P2.3 applies, but the YAML files are different (top-level
+field files rather than ST block type YAML).
+
+If data exists in both contexts: apply the same rename pattern — choose a
+unique intentional name, edit the YAML, update templates, apply, and commit.
+Document the renaming in `HANDLE_REMEDIATIONS` like ST renames.
+
+If both contexts have zero rows (verify via SQL before deciding): document
+in `NON_ST_DUPLICATE_HANDLES` and proceed — the L2 `_v2` count mismatch
+will be caught after migration.
+
+Check the audit output carefully: each duplicate entry includes the YAML file path
 for each instance.

@@ -49,10 +49,16 @@ Read `.craft5-upgrade.md`. Record:
 - `MYSQL_CMD` (working mysql command)
 - `DB_NAME`
 - `DB_CHARSET_EXISTING`
+- `PLUGINS_TO_DISABLE_FOR_UPGRADE` (may be empty)
+- `COMPOSER_POST_UPDATE_HOOK` (yes/no)
 - Plugin target versions from PLUGIN_TARGETS table
 - Any blockers (must be none)
 
 Confirm `PHASE: preflight-done`. If not, stop and instruct as above.
+
+**If `COMPOSER_POST_UPDATE_HOOK: yes`:** note this now. In U2.1, `composer update`
+will automatically run `php craft up` via the `post-update-cmd` hook. U2.2 will
+be a no-op (or will confirm "already up to date"). Do not be surprised by this.
 
 ### U1.1 Confirm backup and version control
 Ask the user to confirm:
@@ -65,8 +71,31 @@ Do not proceed without both confirmed.
 ### U1.2 Pre-upgrade Craft commands
 ```bash
 php craft project-config/rebuild
+```
+This normalises all project YAML files. Expect a large diff — 80+ files
+is normal. Do not review file-by-file; commit with a descriptive message.
+
+```bash
 php craft utils/fix-field-layout-uids
 ```
+
+### U1.2.5 Disable deploy-side plugins
+**Skip this step if `PLUGINS_TO_DISABLE_FOR_UPGRADE` in the state file is empty.**
+
+`fix-field-layout-uids` (and `php craft up` in U2) trigger many element saves.
+Plugins that register `afterSaveElement` with environment-specific paths (cache
+busters, deploy notifiers, search reindex hooks, Slack webhooks) will throw
+`InvalidArgumentException` on dev and abort the command mid-run.
+
+For each plugin in `PLUGINS_TO_DISABLE_FOR_UPGRADE`:
+```bash
+php craft plugin/disable <handle>
+```
+Derive the handle from `php craft plugin/list` — package names often differ
+from plugin handles.
+
+Record the handles disabled here; they must be re-enabled on production
+(added to DEPLOY.md in U3/L5).
 
 ### U1.3 Install the migration module (linkfield projects only)
 **Skip this entire step if `LINKFIELD_PRESENT` is "no".**
@@ -86,6 +115,7 @@ If the state file shows phpdotenv below `^5.6.0`, update the constraint in
 `composer.json` to `^5.6.0`. Do not run `composer update` yet.
 
 ### U1.5 Update `composer.json` for Craft 5
+
 Ask the user if they have run the Craft 5 Upgrade utility in the CP
 (Utilities > Craft 5 Upgrade > Prep `composer.json`) and have output to paste.
 
@@ -99,6 +129,30 @@ If `LINKFIELD_PRESENT` is "yes", also set:
 ```
 If `LINKFIELD_PRESENT` is "no", do not add or modify any linkfield constraint.
 
+### U1.5.5 Configure composer audit
+Craft 5.9.x+ requires `twig/twig ~3.21.0` or newer. These twig versions carry
+active PKSA security advisories. Composer 2.9.x with default settings will
+refuse to resolve them, producing "requirements could not be resolved."
+
+Add (or amend) the `config` section in `composer.json`:
+```json
+"config": {
+    "audit": {
+        "abandoned": "report",
+        "block-insecure": false
+    }
+}
+```
+
+**The `audit` key must be inside `config`, not at the JSON root.**
+
+After adding, record the overridden advisory IDs in the state file:
+```
+COMPOSER_AUDIT_OVERRIDES: PKSA-xxxx, PKSA-yyyy   (see composer audit output)
+```
+Revisit after the upgrade is deployed to check if newer Twig versions resolve
+the advisories.
+
 ### U1.6 Stability flags (linkfield projects only)
 **Skip this entire step if `LINKFIELD_PRESENT` is "no".**
 
@@ -109,7 +163,8 @@ Add to `composer.json` if not already present:
 ```
 
 If `LINKFIELD_PRESENT` is "yes": these flags are removed in `craft-5-linkfield`
-Block L4.1 once the plugin is gone. Note their addition in the U1 report.
+Block L4.3 (after the plugin itself is removed in L4.1). Note their addition in
+the U1 report.
 
 If `LINKFIELD_PRESENT` is "no" but stability flags were added anyway
 (unlikely): remove them in Block U3.
@@ -139,13 +194,21 @@ Do not add `--with-all-dependencies` or package-specific flags.
 If `LINKFIELD_PRESENT` is "yes": confirm both `craftcms/cms` (^5.x) and
 `sebastianlenz/linkfield` (3.0.0-beta) appear in the output.
 
+**If `COMPOSER_POST_UPDATE_HOOK: yes` (from state file):** `composer update`
+will automatically run `php craft up` via the `post-update-cmd` hook. U2.2
+below will likely be a no-op that confirms "already up to date." This is expected.
+
 ### U2.2 Run the Craft database upgrade
 ```bash
 php craft up
 php craft project-config/apply
 ```
-Note: `php craft --version` is not a valid Craft CLI command and will exit
-non-zero. Use the command in U2.5 to confirm the installed version.
+If `COMPOSER_POST_UPDATE_HOOK: yes`, this command will likely output "already
+up to date" — that is correct behaviour, not a failure.
+
+**Note:** `php craft --version` is not a valid Craft CLI command and will exit
+with code 1. Do not treat that as a failure. Use `composer show craftcms/cms`
+(U2.5) to confirm the installed Craft 5 version.
 
 ### U2.3 Install any newly added plugins
 `php craft up` typically installs all plugins. Run `php craft plugin/list` to
@@ -260,7 +323,13 @@ php craft up
 php craft project-config/apply
 ```
 
-### 4. Verify
+### 4. Re-enable plugins disabled for the upgrade
+[If any plugins were disabled in U1.2.5, list them here with:]
+```bash
+php craft plugin/enable <handle>
+```
+
+### 5. Verify
 - [ ] Log into Craft CP — confirm Craft [version] in footer
 - [ ] Browse key page types in browser — confirm no errors
 - [ ] Check logs: `tail -n 50 storage/logs/web.log`

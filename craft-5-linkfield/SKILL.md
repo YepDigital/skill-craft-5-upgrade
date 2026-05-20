@@ -89,20 +89,24 @@ manual investigation before proceeding.
 
 ### L1.3 Unmigrable link types
 
-The following Typed Link Field types have no direct native Craft 5 equivalent
-and will be skipped by the migrator:
+The following Typed Link Field types are skipped by the migrator (`run-direct`
+and `run`):
 
 | Typed Link Field type | Outcome |
 |---|---|
 | `tel` | Skipped. Re-enter manually as a URL link using a `tel:+...` prefix. |
-| `asset` | Skipped by `run-direct`. Re-enter manually in the CP (native Link does support asset links; the migrator gap is a known limitation). |
-| `user` | Skipped. No native equivalent. |
+| `user` | Skipped. No native Craft 5 equivalent. |
 
-Count rows of each type per field in the dry-run output. Include these counts
-in the L1 report and record them in the manual follow-up list for Block L5.
+**`asset` rows are fully migrated by `run-direct`.** The asset element ID is
+stored in `linkedId` and written as `{"type": "asset", "value": "{asset:ID@1:url}"}`.
+Do not flag asset rows as a data loss risk.
+
+Count rows of each **skipped** type per field in the dry-run output. Include
+these counts in the L1 report and record them in the manual follow-up list for
+Block L5.
 
 **Do not proceed to the live migration until the user acknowledges the data
-loss for these rows.**
+loss for the skipped rows.**
 
 ---
 
@@ -149,11 +153,51 @@ post-upgrade dedup), cross-reference by field `name` to determine the correct
 template mapping, and record the resolved mapping in the state file before
 proceeding to templates.
 
+If the `NON_ST_DUPLICATE_HANDLES` list in the state file is non-empty: verify
+that the `_v2` field count matches the source field count. If it doesn't,
+map by field `name` before proceeding.
+
+### L2.2b Verify migrated data by layout element UID
+
+`run-direct` prints layout element UIDs for each `_v2` field at the end of its
+output. `elements_sites.content` is keyed by **field layout element UID**, not
+field UID — direct queries against field UIDs will return 0 rows.
+
+Use the printed UIDs to spot-check migrated content:
+```sql
+SELECT content->>'$."<element_uid>"' AS link_value
+FROM craft_elements_sites
+WHERE content->>'$."<element_uid>"' IS NOT NULL
+LIMIT 5;
+```
+
+If `run-direct` did not print UIDs (older run), use this query to build the map:
+```sql
+SELECT f.handle, je.element_uid
+FROM craft_fields f
+CROSS JOIN craft_fieldlayouts fl
+JOIN JSON_TABLE(fl.config, '$.tabs[*].elements[*]' COLUMNS (
+  element_uid VARCHAR(36) PATH '$.uid',
+  field_uid   VARCHAR(36) PATH '$.fieldUid'
+)) AS je ON je.field_uid = f.uid
+WHERE f.handle LIKE '%_v2';
+```
+
 ---
 
-**STOP. Report migration output. Do not proceed to Block L3 until the user
-confirms `_v2` fields are populated correctly in the Craft CP on at least
-3–5 entries (check an entry type that uses each migrated field).**
+**STOP. The frontend is broken between L2 and L3** — templates that access
+migrated handles via the old Typed Link Field API throw
+`BadMethodCallException: Method ElementCollection::getType does not exist`
+on every page that includes those partials. The Craft CP works normally.
+Do not share frontend previews of the site during this window.
+
+**Hard stop — CP verification required.** Open the Craft CP and check at
+least 3 entries using each migrated field. For every entry, confirm:
+1. The link URL is present and correct.
+2. If the source had a label (`customText`), the label field is populated.
+3. The link type (URL / entry / asset) is correct.
+
+**Type "verified" to continue to Block L3.** Do not proceed on partial checks.
 
 ---
 
@@ -215,29 +259,40 @@ the migration requires.
 List every file modified with a summary of changes; show diffs for non-trivial
 files.
 
+### L3.5 Post-patch bare-reference sweep
+After patching, run the patcher in `--verify` mode to confirm no old handles
+remain in templates:
+```bash
+python3 ~/.claude/skills/craft-5-linkfield/scripts/patch-templates.py \
+  --handles '{"primaryLink":"primaryLink_v2",...}' \
+  --files <all HANDLE_REFERENCE_FILES from state file> \
+  --verify
+```
+
+If `--verify` exits non-zero: the output lists files still containing bare
+old-handle references. Re-run the patcher on those files, then sweep again.
+**Do not proceed to L4 until the sweep is clean.**
+
+This step catches files that were in `HANDLE_REFERENCE_FILES` but absent from
+`DEPRECATED_API_FILES` (passed arguments to includes rather than direct method
+calls) — these would otherwise silently call methods that no longer exist.
+
 ---
 
-**STOP. Report all template changes. Wait for confirmation before Block L4.**
+**STOP. Report all template changes and verify output. Wait for confirmation before Block L4.**
 
 ---
 
 ## BLOCK L4 — Cleanup and finalisation
 
-### L4.1 Remove minimum-stability flags
-Remove `"minimum-stability": "beta"` and `"prefer-stable": true` from
-`composer.json`, then:
-```bash
-composer update --lock --no-interaction
-```
+**Steps run in this order:** L4.1 (cleanup + remove plugin) → L4.2 (apply) →
+L4.3 (remove stability flags + lock) → L4.4 (CKEditor) → L4.5 (auto-merge).
 
-### L4.2 CKEditor Redactor conversion (if applicable)
-If the project uses Redactor fields:
-```bash
-php craft ckeditor/convert/redactor
-```
-Skip if no Redactor fields exist.
+This order matters: removing stability flags before removing the beta plugin
+(`sebastianlenz/linkfield: ^3.0.0-beta`) causes `composer update --lock` to
+fail because the constraint can no longer resolve without beta stability.
 
-### L4.3 Linkfield cleanup and removal
+### L4.1 Linkfield cleanup and removal
 
 **Primary path (`run-direct`):**
 ```bash
@@ -260,10 +315,28 @@ add them:
 php craft project-config/rebuild
 ```
 
-### L4.4 Apply project config
+### L4.2 Apply project config
 ```bash
 php craft project-config/apply
 ```
+
+### L4.3 Remove minimum-stability flags
+Now that `sebastianlenz/linkfield` is removed, remove the stability flags:
+```json
+"minimum-stability": "beta",
+"prefer-stable": true
+```
+Then lock without re-resolving:
+```bash
+composer update --lock --no-interaction
+```
+
+### L4.4 CKEditor Redactor conversion (if applicable)
+If the project uses Redactor fields:
+```bash
+php craft ckeditor/convert/redactor
+```
+Skip if no Redactor fields exist.
 
 ### L4.5 Run fields/auto-merge
 `php craft fields/auto-merge` requires an interactive terminal and cannot be
@@ -298,11 +371,12 @@ Produce a structured summary:
   - Super Table single-row access patterns needing `.one()`
   - `user` link type rows skipped (no native equivalent; re-enter manually)
   - `tel` link type rows skipped (re-enter as URL links using `tel:+...` prefix)
-  - `asset` link type rows skipped (re-enter in the CP; native Link supports asset links)
+  - (`asset` rows are migrated automatically by `run-direct` — no manual action)
   - Any `_v2` fields not yet visible in entry type layouts — add via CP
     (if `run-direct` was used and layout insertion was not possible)
   - Any fields where pre-existing duplicate handles caused data to be
     unmigratable (only if not remediated in preflight — manual re-entry required)
+  - Re-enable any plugins listed in `PLUGINS_TO_DISABLE_FOR_UPGRADE` on production
 
 ### L5.2 Generate DEPLOY.md
 
@@ -366,13 +440,19 @@ php craft up
 php craft project-config/apply
 ```
 
-### 7. Verify
+### 7. Re-enable plugins disabled for the upgrade
+[If any plugins were listed in PLUGINS_TO_DISABLE_FOR_UPGRADE:]
+```bash
+php craft plugin/enable <handle>
+```
+
+### 8. Verify
 - [ ] Log into Craft CP — confirm Craft [version] in footer
 - [ ] Open an entry using field [first _v2 handle] — confirm link renders correctly
 - [ ] Load a URL from a patched template — confirm no errors
 - [ ] Check logs: `tail -n 50 storage/logs/web.log`
 
-### 8. Exit maintenance mode
+### 9. Exit maintenance mode
 [Reverse of step 2]
 
 ## Rollback

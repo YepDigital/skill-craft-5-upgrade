@@ -256,6 +256,7 @@ class MigrateLinkfieldController extends Controller
         }
 
         $this->printSummary($summary);
+        $this->printLayoutElementUids($plan);
 
         if ($this->cleanup) {
             $this->stdout("\n[Cleanup] Zombie fields removed. Run `php craft project-config/apply` to sync.\n", Console::FG_YELLOW);
@@ -325,13 +326,22 @@ class MigrateLinkfieldController extends Controller
         string $newHandle
     ): ?NativeLinkField {
         $fieldsService = Craft::$app->getFields();
+        $hasCustomText = $this->sourceFieldHasCustomText($oldField->id);
 
         $existing = $fieldsService->getFieldByHandle($newHandle);
         if ($existing instanceof NativeLinkField) {
+            $changed = false;
             if (!in_array('target', $existing->advancedFields ?? [], true)) {
                 $existing->advancedFields = array_merge($existing->advancedFields ?? [], ['target']);
+                $changed = true;
+            }
+            if ($hasCustomText && !($existing->showLabelField ?? false)) {
+                $existing->showLabelField = true;
+                $changed = true;
+            }
+            if ($changed) {
                 $fieldsService->saveField($existing);
-                $this->stdout("  Updated '{$newHandle}' to enable target support.\n");
+                $this->stdout("  Updated '{$newHandle}' settings (showLabelField / target).\n");
             }
             $this->stdout("  Native field '{$newHandle}' already exists. Reusing.\n");
             return $existing;
@@ -344,7 +354,13 @@ class MigrateLinkfieldController extends Controller
             'translationMethod' => $oldField->translationMethod,
             'types'             => $this->resolveEnabledTypes($oldField),
             'advancedFields'    => ['target'],
+            'showLabelField'    => $hasCustomText,
         ]);
+
+        if ($hasCustomText) {
+            $labelRowCount = $this->countCustomTextRows($oldField->id);
+            $this->stdout("  Enabled showLabelField on '{$newHandle}' ({$labelRowCount} source rows with customText).\n", Console::FG_CYAN);
+        }
 
         if (!$fieldsService->saveField($newField)) {
             $this->stderr("  [ERROR] Save failed: " . implode(', ', $newField->getFirstErrors()) . "\n", Console::FG_RED);
@@ -386,12 +402,23 @@ class MigrateLinkfieldController extends Controller
         $newHandle    = $oldHandle . $this->suffix;
         $fieldsService = Craft::$app->getFields();
 
+        $hasCustomText = $this->sourceFieldHasCustomText($oldId);
+
         $existing = $fieldsService->getFieldByHandle($newHandle);
         if ($existing instanceof NativeLinkField) {
+            $changed = false;
             if (!in_array('target', $existing->advancedFields ?? [], true)) {
                 $existing->advancedFields = array_merge($existing->advancedFields ?? [], ['target']);
+                $changed = true;
+            }
+            // Re-enable showLabelField if it was disabled but source has labels.
+            if ($hasCustomText && !($existing->showLabelField ?? false)) {
+                $existing->showLabelField = true;
+                $changed = true;
+            }
+            if ($changed) {
                 $fieldsService->saveField($existing);
-                $this->stdout("  Updated '{$newHandle}' to enable target support.\n");
+                $this->stdout("  Updated '{$newHandle}' settings (showLabelField / target).\n");
             }
             $this->stdout("  Native field '{$newHandle}' already exists. Reusing.\n");
             return $existing;
@@ -403,7 +430,13 @@ class MigrateLinkfieldController extends Controller
             'handle'         => $newHandle,
             'types'          => $this->resolveEnabledTypesFromSettings(is_array($settings) ? $settings : []),
             'advancedFields' => ['target'],
+            'showLabelField' => $hasCustomText,
         ]);
+
+        if ($hasCustomText) {
+            $labelRowCount = $this->countCustomTextRows($oldId);
+            $this->stdout("  Enabled showLabelField on '{$newHandle}' ({$labelRowCount} source rows with customText).\n", Console::FG_CYAN);
+        }
 
         if (!$fieldsService->saveField($newField)) {
             $this->stderr(
@@ -423,6 +456,34 @@ class MigrateLinkfieldController extends Controller
         $this->addFieldToLayoutsById($oldId, $newField);
 
         return $newField;
+    }
+
+    /**
+     * Return true if the source field has any non-empty customText in its payload.
+     * Used to decide whether to enable showLabelField on the destination _v2 field.
+     */
+    private function sourceFieldHasCustomText(int $fieldId): bool
+    {
+        $result = Craft::$app->getDb()->createCommand(
+            'SELECT 1 FROM {{%lenz_linkfield}}
+             WHERE [[fieldId]] = :fieldId
+               AND JSON_EXTRACT([[payload]], :path) IS NOT NULL
+               AND JSON_UNQUOTE(JSON_EXTRACT([[payload]], :path)) <> \'\'
+             LIMIT 1',
+            [':fieldId' => $fieldId, ':path' => '$.customText']
+        )->queryScalar();
+        return (bool)$result;
+    }
+
+    private function countCustomTextRows(int $fieldId): int
+    {
+        return (int) Craft::$app->getDb()->createCommand(
+            'SELECT COUNT(*) FROM {{%lenz_linkfield}}
+             WHERE [[fieldId]] = :fieldId
+               AND JSON_EXTRACT([[payload]], :path) IS NOT NULL
+               AND JSON_UNQUOTE(JSON_EXTRACT([[payload]], :path)) <> \'\'',
+            [':fieldId' => $fieldId, ':path' => '$.customText']
+        )->queryScalar();
     }
 
     /**
@@ -757,6 +818,75 @@ class MigrateLinkfieldController extends Controller
             $statusColor = $row['status'] === 'OK' ? Console::FG_GREEN : Console::FG_RED;
             $this->stdout(sprintf("%-28s  %-10s  %-10s  ", $handle, $row['migrated'], $row['skipped']));
             $this->stdout($row['status'] . "\n", $statusColor);
+        }
+    }
+
+    /**
+     * Return field layout element UIDs for a given field ID.
+     *
+     * Craft 5 stores element data in elements_sites.content keyed by the
+     * field layout element UID — NOT the field UID. Use these UIDs to verify
+     * migrated data: SELECT content->>'$."<element_uid>"' FROM elements_sites.
+     *
+     * @return array<string, string>  elementUid => layoutUid
+     */
+    private function layoutElementUidsForFieldId(int $fieldId): array
+    {
+        $field = Craft::$app->getFields()->getFieldById($fieldId);
+        if (!$field) {
+            return [];
+        }
+
+        $result = [];
+        try {
+            $layouts = Craft::$app->getDb()->createCommand(
+                'SELECT [[uid]], [[config]] FROM {{%fieldlayouts}} WHERE [[dateDeleted]] IS NULL'
+            )->queryAll();
+
+            foreach ($layouts as $layoutRow) {
+                if (empty($layoutRow['config'])) {
+                    continue;
+                }
+                $config = Json::decodeIfJson($layoutRow['config']);
+                if (!is_array($config)) {
+                    continue;
+                }
+                foreach ($config['tabs'] ?? [] as $tab) {
+                    foreach ($tab['elements'] ?? [] as $element) {
+                        if (($element['fieldUid'] ?? null) === $field->uid) {
+                            $result[$element['uid']] = $layoutRow['uid'];
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable) {
+        }
+
+        return $result;
+    }
+
+    /**
+     * Print layout element UIDs for _v2 fields so users can verify migrated data.
+     * elements_sites.content is keyed by field layout element UID, not field UID.
+     * Call this after the migration summary to give the user the verification SQL.
+     */
+    private function printLayoutElementUids(array $plan): void
+    {
+        $this->stdout("\n=== Layout element UIDs for data verification ===\n", Console::FG_CYAN, Console::BOLD);
+        $this->stdout("elements_sites.content is keyed by layout element UID, not field UID.\n");
+        $this->stdout("Use the UIDs below to verify migrated data in Block L2.2b.\n\n");
+
+        foreach ($plan as $oldId => $info) {
+            $newField = $info['newField'];
+            $uids = $this->layoutElementUidsForFieldId($newField->id);
+            $this->stdout(sprintf("  %s_v2 (field id: %d)\n", $info['handle'], $newField->id));
+            if (empty($uids)) {
+                $this->stdout("    (no layout element UIDs found — field may not be in any layout yet)\n", Console::FG_YELLOW);
+            } else {
+                foreach ($uids as $elementUid => $layoutUid) {
+                    $this->stdout("    element uid: {$elementUid}\n");
+                }
+            }
         }
     }
 }

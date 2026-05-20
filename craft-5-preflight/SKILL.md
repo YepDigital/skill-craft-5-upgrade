@@ -88,38 +88,56 @@ php craft queue/info
 ```
 Flag any pending or reserved jobs as a blocker.
 
-### P1.7 / P1.7a / P1.8 Audit script
+### P1.7 / P1.7a / P1.7b / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 Audit script
 Run from the project root:
 ```bash
-bash ~/.claude/skills/craft-5-preflight/scripts/audit.sh
+python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py
 ```
 
-This covers three areas in one pass:
-- **P1.7** — Linkfield field inventory (handle, name, enabled types, columnSuffix)
+This covers all areas in one pass:
+- **P1.7** — Linkfield field inventory (handle, name, enabled types, columnSuffix) — parsed correctly per field block, not by regex
 - **P1.7a** — Super Table duplicate field handles
+- **P1.7b** — Duplicate linkfield handles across non-ST contexts (top-level, matrix)
 - **P1.8** — Deprecated API calls and `.with([` calls in templates
+- **P1.8b** — All template files referencing any linkfield handle (for the L3 patcher file list)
+- **P1.10b** — Non-standard customisations in `bootstrap.php` / `web/index.php`
+- **P1.12** — Vendor plugins with `afterSave*` event hooks
+- **P1.13** — `composer.json` `post-update-cmd` running `@craft-update`
 
-Read the output and record all findings. Do not grep files manually unless the
-script fails to run.
+Read the output and record all findings. The script prints a state file summary at the end — use it directly in Block P3.
 
 **After running — P1.7a note:**
 List every duplicate Super Table sub-field handle found. These are remediated
 in Block P2.
 
 **Data loss risk from duplicate handles + linkfield data:**
-`getAllFields()` surfaces only one field instance per handle. If two Super Table
-block types share a handle and both carry linkfield data, only one field's data
-will be migrated in `craft-5-linkfield`. Flag this explicitly.
-Craft-4-side remediation (Block P2) eliminates this risk entirely.
+`getAllFields()` in the `craft-5-linkfield` migrator surfaces only one field
+instance per handle. If two Super Table block types share a handle and both
+carry linkfield data, only one field's data will be migrated. This is a
+migrator-layer risk (not a Craft core dedup). Craft-4-side remediation (Block P2)
+eliminates this risk entirely.
+
+**After running — P1.7b note:**
+Duplicate linkfield handles across non-ST contexts (e.g. `linkTo` in a
+top-level field AND in a Matrix block sub-field) also trigger the same
+`getAllFields()` collision. These cannot be remediated by P2 (which targets
+ST sub-fields only) — document them in `NON_ST_DUPLICATE_HANDLES` and warn
+the user to verify the L2 `_v2` field count after migration.
 
 **After running — columnSuffix note:**
 List any linkfield fields with a `columnSuffix` value. Record these in the
 state file for explicit verification in `craft-5-linkfield` Block L1.
 
-**After running — P1.8 note:**
-Cross-reference `.with([` matches against linkfield handles from P1.7.
-Any `.with()` call on a migrated handle must be removed in `craft-5-linkfield`
-Block L3.
+**After running — P1.8b note:**
+`HANDLE_REFERENCE_FILES` contains ALL template files that reference any
+linkfield handle. Use this list (not just `DEPRECATED_API_FILES`) as the
+`--files` argument to `patch-templates.py` in `craft-5-linkfield` Block L3.
+
+**After running — P1.12 note:**
+`PLUGINS_TO_DISABLE_FOR_UPGRADE` lists plugins with `afterSave*` event hooks.
+These must be disabled before U1.2 — `fix-field-layout-uids` triggers many
+element saves, and deploy-side hooks with environment-specific paths will fail.
+Add a re-enable instruction to `DEPLOY.md` in U3/L5.
 
 ### P1.9 Template extension collisions
 Search `templates/` for directories containing both a `.twig` and `.html` file
@@ -172,18 +190,23 @@ block types):
 
 ### P2.3 Apply each rename
 
-After the user approves proposals, for each rename:
+After the user approves proposals, apply one logical group at a time:
+
+**One rename operation = all sub-fields within a single ST block type,
+renamed together, with one `project-config/apply` between groups.**
+
+For each group:
 
 1. Edit the relevant YAML file(s) in `config/project/` to change the
-   `handle:` value.
-2. Search `templates/` for every reference to the old handle within the
-   context of the relevant Super Table loop (use the surrounding template
+   `handle:` value for every sub-field in that block type.
+2. Search `templates/` for every reference to the old handles within the
+   context of that block type's loop (use the surrounding template
    structure to scope the search). Update all references.
 3. Run: `php craft project-config/apply`
 4. Ask the user to confirm the Craft 4 site still loads correctly in browser.
 
-Process one rename at a time. Stop and report diffs between each rename.
-Record each in the state file:
+Stop and report diffs after each group. Do not apply the next group until
+confirmed. Record each rename in the state file:
 ```
 HANDLE_REMEDIATIONS: <oldHandle> (blockType: <type>) → <newHandle>
 ```
@@ -194,6 +217,20 @@ git add -p
 git commit -m "refactor: rename duplicate Super Table handles before Craft 5 upgrade"
 ```
 Confirm `git status` is clean before proceeding.
+
+### P2.5 Non-ST duplicate linkfield handles (if any)
+
+**Skip this step if P1.7b found no non-ST duplicate linkfield handles.**
+
+If `NON_ST_DUPLICATE_HANDLES` is non-empty: document each duplicate clearly
+in the state file. Unlike ST sub-field handles, these cannot be renamed
+on Craft 4 without risk (they may be shared across entry types / matrix blocks).
+
+For each non-ST duplicate:
+1. Record which contexts share the handle (top-level, matrix block type).
+2. Inform the user that after migration the `_v2` field count may not be 1:1.
+3. After `craft-5-linkfield` Block L2, verify that the actual `_v2` field
+   count matches the source count — if not, map by field `name` manually.
 
 ---
 
@@ -227,9 +264,9 @@ DB_CHARSET_EXISTING: <existing CRAFT_DB_CHARSET value, or "(none)">
 
 ## Linkfield inventory
 <!-- One row per linkfield field. Empty section if LINKFIELD_PRESENT=no. -->
-| handle | name | enabled types | columnSuffix | rows (approx) |
-|--------|------|---------------|--------------|---------------|
-| ...    | ...  | ...           | none / <val> | ...           |
+| handle | name | context | enabled types | columnSuffix |
+|--------|------|---------|---------------|--------------|
+| ...    | ...  | ...     | ...           | none / <val> |
 
 ## Handle remediations (renamed on Craft 4)
 <!-- Empty table if P1.7a found no duplicates. -->
@@ -237,13 +274,41 @@ DB_CHARSET_EXISTING: <existing CRAFT_DB_CHARSET value, or "(none)">
 |------------|------------------------|------------|
 | ...        | ...                    | ...        |
 
+## Non-ST duplicate linkfield handles
+<!-- Empty if P1.7b found none. These cannot be renamed on Craft 4. -->
+<!-- Verify _v2 field count matches source count in craft-5-linkfield Block L2. -->
+NON_ST_DUPLICATE_HANDLES:
+  - handle: <name>, contexts: [<top-level / matrix:BlockType, ...>]
+
 ## Template audit
-<!-- Files to patch in craft-5-linkfield Block L3. -->
+<!-- Use HANDLE_REFERENCE_FILES as the --files list for patch-templates.py in L3. -->
 DEPRECATED_API_FILES:
   - <file path>
 
 WITH_CALL_FILES:
   - <file path>
+
+HANDLE_REFERENCE_FILES:
+  - <file path>
+
+## Bootstrap customisations
+<!-- From P1.10b. Note anything that suppresses errors or changes PHP behaviour. -->
+BOOTSTRAP_CUSTOMISATIONS:
+  - <description or "(none)">
+
+## Plugins to disable for upgrade
+<!-- From P1.12: plugins with afterSave* hooks that will fail in dev during U1.2. -->
+<!-- Disable before U1.2; re-enable in DEPLOY.md for production. -->
+PLUGINS_TO_DISABLE_FOR_UPGRADE:
+  - <package-handle>  # reason: <short note>
+
+## Composer hook
+COMPOSER_POST_UPDATE_HOOK: yes|no
+<!-- If yes: U2.1 (composer update) automatically runs php craft up; U2.2 is a no-op. -->
+
+## Composer audit overrides
+<!-- Populated in craft-5-upgrade U1.5.5 after adding block-insecure: false. -->
+COMPOSER_AUDIT_OVERRIDES: (none)
 
 ## Plugin targets (Craft 5 versions)
 | package | Craft 5 target version |

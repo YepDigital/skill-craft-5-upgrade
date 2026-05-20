@@ -49,8 +49,10 @@ Each skill:
   carried through the state file).
 
 ### craft-5-preflight
-- `scripts/audit.sh` — read-only audit (P1.7, P1.7a, P1.8): linkfield field
-  inventory, Super Table duplicate handles, deprecated template API calls.
+- `scripts/audit.py` — read-only audit (P1.7, P1.7a, P1.7b, P1.8, P1.8b,
+  P1.10b, P1.12, P1.13): linkfield inventory, Super Table duplicate handles,
+  non-ST duplicate handles, deprecated API calls, handle reference files,
+  bootstrap customisations, afterSave* plugins, composer post-update-cmd.
 - `references/handle-remediation.md` — detailed guide for Block P2
   (duplicate handle renaming on Craft 4, the primary root-cause fix).
 
@@ -90,7 +92,7 @@ Craft 4-era field settings — the common real-site failure mode.
   their intent in any edit: minimal diffs, stop-and-report on error, no
   destructive default behaviour.
 - Keep SKILL.md and support files in sync. Block codes are referenced by name
-  across files (e.g. audit.sh header cites "P1.7, P1.7a, P1.8"; linkfield
+  across files (e.g. audit.py header cites "P1.7, P1.7a, P1.7b, P1.8 ..."; linkfield
   SKILL.md Block L3 cites `references/template-migration.md`). Renumbering a
   block means updating every cross-reference.
 - The migration command is destructive against the target DB. The dry-run-before-
