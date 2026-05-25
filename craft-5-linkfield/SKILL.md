@@ -288,12 +288,12 @@ Run the patcher in dry-run mode first, review the diffs, then apply:
 ```bash
 python3 ~/.claude/skills/craft-5-linkfield/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
-  --files <DEPRECATED_API_FILES and WITH_CALL_FILES from state file> \
+  --files <HANDLE_REFERENCE_FILES from state file> \
   --dry-run
 
 python3 ~/.claude/skills/craft-5-linkfield/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
-  --files <same files>
+  --files <HANDLE_REFERENCE_FILES from state file>
 ```
 
 The script applies:

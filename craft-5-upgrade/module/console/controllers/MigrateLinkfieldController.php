@@ -141,13 +141,6 @@ class MigrateLinkfieldController extends Controller
 
         $this->printSummary($summary);
 
-        if ($this->cleanup) {
-            $this->stdout("\n");
-            $this->stdout("[Cleanup] Old fields removed. Now run:\n", Console::FG_YELLOW);
-            $this->stdout("  composer remove sebastianlenz/linkfield\n", Console::FG_YELLOW);
-            $this->stdout("  php craft project-config/apply\n", Console::FG_YELLOW);
-        }
-
         $this->stdout("\nDone.\n", Console::FG_GREEN, Console::BOLD);
         return ExitCode::OK;
     }
