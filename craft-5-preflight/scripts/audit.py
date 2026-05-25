@@ -430,12 +430,50 @@ def run_p18b(templates_dir, lf_records, deprecated_files, with_files):
         none_found()
         return set()
 
-    info('All template files referencing any linkfield handle (bare, method call, or argument).')
+    info('All template files referencing any linkfield handle (bare, method call, argument dict, or include target bound to a handle).')
     info('Use this list as the --files argument to patch-templates.py in Block L3.')
     print()
 
     pat = re.compile(r'\b(' + '|'.join(re.escape(h) for h in handles) + r')\b')
+    # Twig include(...) calls with an argument dict. Captures path + dict body.
+    # The dict body match is intentionally permissive — we only inspect its
+    # contents for handle tokens, so nested braces/multi-line dicts are fine
+    # in practice (the regex tolerates one level of nesting).
+    # Twig has two include forms — function `include("path", { ... })` and
+    # tag `{% include "path" with { ... } %}`. Match both.
+    include_pat = re.compile(
+        r'(?:\binclude\s*\(\s*|\{%-?\s*include\s+)'
+        r'["\']([^"\']+)["\']'
+        r'(?:\s*,\s*|\s+with\s+)'
+        r'(\{(?:[^{}]|\{[^{}]*\})*\})',
+        re.DOTALL,
+    )
     handle_ref_files = defaultdict(set)
+
+    def add_include_target(src_dir, target_str, handles_found):
+        """Resolve a Twig include path and mark the target file as needing patching.
+
+        Twig templates that receive a linkfield via include argument reference
+        the bound *variable name* (e.g. `linkField.url()`), not the handle —
+        so a plain handle-token scan misses them. The include's caller binds
+        the handle, so we propagate the handle association to the target.
+        """
+        # Strip leading '@namespace/' if present (e.g. @app/foo) — namespace
+        # roots can't be resolved generically; fall back to templates_dir-relative.
+        rel = re.sub(r'^@[^/]+/', '', target_str)
+        candidates = []
+        if rel.endswith('.twig') or rel.endswith('.html'):
+            candidates.append(rel)
+        else:
+            candidates.extend([rel + '.twig', rel + '.html', rel + '/index.twig'])
+        for cand in candidates:
+            # Try templates_dir-relative first, then source-file-relative.
+            for base in (templates_dir, Path(src_dir)):
+                p = (base / cand).resolve()
+                if p.is_file() and str(p).startswith(str(templates_dir.resolve())):
+                    for h in handles_found:
+                        handle_ref_files[str(p)].add(h)
+                    return
 
     for root, _, files in os.walk(str(templates_dir)):
         for fname in sorted(files):
@@ -446,6 +484,13 @@ def run_p18b(templates_dir, lf_records, deprecated_files, with_files):
                 text = open(fpath, encoding='utf-8', errors='replace').read()
                 for m in pat.finditer(text):
                     handle_ref_files[fpath].add(m.group(1))
+                # Cross-file: if this file binds a handle into an include's
+                # argument dict, the included target also needs L3 patching.
+                for im in include_pat.finditer(text):
+                    target, arg_dict = im.group(1), im.group(2)
+                    handles_in_args = {hm.group(1) for hm in pat.finditer(arg_dict)}
+                    if handles_in_args:
+                        add_include_target(root, target, handles_in_args)
             except (OSError, IOError):
                 pass
 
@@ -530,12 +575,74 @@ _AFTERSAVE_PATTERNS = [
 ]
 
 
+def _build_composer_map(vendor_dir):
+    """Build {package_name → composer.json data} for every vendor package."""
+    result = {}
+    try:
+        vendor_names = os.listdir(str(vendor_dir))
+    except OSError:
+        return result
+
+    for vendor_name in vendor_names:
+        if vendor_name.startswith('.'):
+            continue
+        vp = vendor_dir / vendor_name
+        if not vp.is_dir():
+            continue
+        try:
+            pkg_names = os.listdir(str(vp))
+        except OSError:
+            continue
+        for pkg_name in pkg_names:
+            composer_json = vp / pkg_name / 'composer.json'
+            if not composer_json.exists():
+                continue
+            try:
+                result[f'{vendor_name}/{pkg_name}'] = json.loads(
+                    composer_json.read_text(encoding='utf-8', errors='replace')
+                )
+            except (json.JSONDecodeError, OSError):
+                pass
+    return result
+
+
+def _resolve_plugin_handle(pkg_key, composer_map):
+    """Resolve a vendor package to its Craft plugin handle.
+
+    Returns (host_pkg, handle) where host_pkg is the package containing the
+    Craft plugin (may equal pkg_key) and handle is the plugin's handle from
+    composer.json `extra.handle`. Returns (None, None) when no host plugin
+    can be found — caller falls back to the package name.
+
+    Craft 4 plugin convention: composer.json has `"type": "craft-plugin"` and
+    `"extra": {"handle": "<handle>"}`. Vendor libraries bundled with plugins
+    (e.g. sebastianlenz/craft-utils inside sebastianlenz/linkfield) register
+    their own afterSave* hooks but disabling them means disabling the host
+    plugin — `php craft plugin/disable <package-name>` won't work.
+    """
+    own = composer_map.get(pkg_key, {}) or {}
+    if own.get('type') == 'craft-plugin':
+        return pkg_key, ((own.get('extra') or {}).get('handle'))
+
+    for other_pkg, other_data in composer_map.items():
+        if other_pkg == pkg_key or (other_data or {}).get('type') != 'craft-plugin':
+            continue
+        requires = {
+            **((other_data.get('require') or {})),
+            **((other_data.get('require-dev') or {})),
+        }
+        if pkg_key in requires:
+            return other_pkg, ((other_data.get('extra') or {}).get('handle'))
+
+    return None, None
+
+
 def run_p112(project_root):
     section('P1.12 PLUGINS WITH afterSave* EVENT HOOKS')
     vendor_dir = project_root / 'vendor'
     if not vendor_dir.is_dir():
         warn(f'{vendor_dir} not found — skipping')
-        return
+        return []
 
     info('Scanning vendor plugins for afterSave* event registrations...')
     info('(May take a moment on large vendor directories.)')
@@ -546,7 +653,7 @@ def run_p112(project_root):
         vendor_names = sorted(os.listdir(str(vendor_dir)))
     except OSError:
         warn('Could not read vendor/ directory.')
-        return
+        return []
 
     for vendor_name in vendor_names:
         if vendor_name.startswith('.') or vendor_name in _SKIP_VENDORS:
@@ -590,17 +697,38 @@ def run_p112(project_root):
     if not results:
         info('No plugins with afterSave* event hooks detected.')
         info('(If a deploy-side plugin is not listed, disable it manually before U1.2.)')
-        return
+        return []
+
+    composer_map = _build_composer_map(vendor_dir)
+    resolved = []  # list of dicts: pkg, host_pkg, handle, patterns
+    for pkg, patterns in sorted(results.items()):
+        host_pkg, handle = _resolve_plugin_handle(pkg, composer_map)
+        resolved.append({
+            'pkg': pkg,
+            'host_pkg': host_pkg,
+            'handle': handle,
+            'patterns': patterns,
+        })
 
     warn('These plugins should be disabled before U1.2 (fix-field-layout-uids triggers')
     warn('many element saves; deploy-side hooks with env-specific paths will fail).')
     warn('Add them to PLUGINS_TO_DISABLE_FOR_UPGRADE in the state file.')
     warn('Re-enable on production after deployment (add to DEPLOY.md).')
     print()
-    for pkg, patterns in sorted(results.items()):
-        found(pkg)
+    for entry in resolved:
+        pkg, host_pkg, handle, patterns = (
+            entry['pkg'], entry['host_pkg'], entry['handle'], entry['patterns']
+        )
+        if host_pkg and host_pkg != pkg:
+            found(f'{pkg}  (host plugin: {host_pkg}, handle: {handle or "?"})')
+        elif handle:
+            found(f'{pkg}  (handle: {handle})')
+        else:
+            found(f'{pkg}  (no Craft plugin handle resolved — disable manually)')
         for pat in patterns:
             info(f'    ↳ {pat}')
+
+    return resolved
 
 
 # ── P1.13 – composer.json post-update-cmd ────────────────────────────────────
@@ -674,7 +802,7 @@ def main():
     deprecated_files, with_files = run_p18(templates_dir)
     all_template_files = run_p18b(templates_dir, lf_records, deprecated_files, with_files)
     run_p1_bootstrap(project_root)
-    run_p112(project_root)
+    plugins_to_disable = run_p112(project_root)
     has_post_update_hook = run_p113(project_root)
 
     # ── State file summary ────────────────────────────────────────────────────
@@ -707,6 +835,22 @@ def main():
     print('HANDLE_REFERENCE_FILES:')
     for f in sorted(all_template_files): print(f'  - {f}')
     if not all_template_files: print('  (none)')
+
+    print()
+    print('PLUGINS_TO_DISABLE_FOR_UPGRADE:')
+    if plugins_to_disable:
+        for entry in plugins_to_disable:
+            handle = entry['handle']
+            host = entry['host_pkg']
+            pkg = entry['pkg']
+            if handle and host and host != pkg:
+                print(f'  - {handle}  # afterSave* registered in {pkg} (host plugin: {host})')
+            elif handle:
+                print(f'  - {handle}  # afterSave* registered in {pkg}')
+            else:
+                print(f'  - {pkg}  # no plugin handle resolved — derive from `php craft plugin/list` and disable manually')
+    else:
+        print('  (none)')
 
     print()
     print(f'COMPOSER_POST_UPDATE_HOOK: {"yes" if has_post_update_hook else "no"}')

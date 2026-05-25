@@ -87,12 +87,16 @@ Plugins that register `afterSaveElement` with environment-specific paths (cache
 busters, deploy notifiers, search reindex hooks, Slack webhooks) will throw
 `InvalidArgumentException` on dev and abort the command mid-run.
 
-For each plugin in `PLUGINS_TO_DISABLE_FOR_UPGRADE`:
+The preflight audit resolves vendor libraries to their host plugin and records
+plugin handles (not package names) directly in `PLUGINS_TO_DISABLE_FOR_UPGRADE`.
+For each entry:
 ```bash
 php craft plugin/disable <handle>
 ```
-Derive the handle from `php craft plugin/list` — package names often differ
-from plugin handles.
+
+If an entry shows `# no plugin handle resolved`, the preflight could not map
+the vendor library to a host plugin — derive the handle from
+`php craft plugin/list` and disable manually.
 
 Record the handles disabled here; they must be re-enabled on production
 (added to DEPLOY.md in U3/L5).
@@ -129,29 +133,39 @@ If `LINKFIELD_PRESENT` is "yes", also set:
 ```
 If `LINKFIELD_PRESENT` is "no", do not add or modify any linkfield constraint.
 
-### U1.5.5 Configure composer audit
-Craft 5.9.x+ requires `twig/twig ~3.21.0` or newer. These twig versions carry
-active PKSA security advisories. Composer 2.9.x with default settings will
-refuse to resolve them, producing "requirements could not be resolved."
+### U1.5.5 Configure composer audit (conditional)
+Craft 5.9.x+ requires `twig/twig ~3.21.0` or newer. Some twig versions in that
+range carry active PKSA security advisories; Composer 2.9.x with default
+settings refuses to resolve them ("requirements could not be resolved").
 
-Add (or amend) the `config` section in `composer.json`:
-```json
-"config": {
-    "audit": {
-        "abandoned": "report",
-        "block-insecure": false
-    }
-}
+**Check first** — many runs need no override:
+```bash
+composer audit --no-dev
 ```
 
-**The `audit` key must be inside `config`, not at the JSON root.**
+- If the output ends with `0 advisories` (or `No security vulnerability
+  advisories found`), no override is required. Skip the rest of this step
+  and record `COMPOSER_AUDIT_OVERRIDES: (none — composer audit clean)` in the
+  state file.
 
-After adding, record the overridden advisory IDs in the state file:
-```
-COMPOSER_AUDIT_OVERRIDES: PKSA-xxxx, PKSA-yyyy   (see composer audit output)
-```
-Revisit after the upgrade is deployed to check if newer Twig versions resolve
-the advisories.
+- If advisories are reported, add (or amend) the `config` section in
+  `composer.json`:
+  ```json
+  "config": {
+      "audit": {
+          "abandoned": "report",
+          "block-insecure": false
+      }
+  }
+  ```
+  **The `audit` key must be inside `config`, not at the JSON root.**
+
+  Record the actual advisory IDs from the audit output in the state file:
+  ```
+  COMPOSER_AUDIT_OVERRIDES: PKSA-xxxx, PKSA-yyyy
+  ```
+  Revisit after the upgrade is deployed to check if newer Twig versions
+  resolve the advisories.
 
 ### U1.6 Stability flags (linkfield projects only)
 **Skip this entire step if `LINKFIELD_PRESENT` is "no".**
@@ -260,6 +274,21 @@ Done for this skill. Do not proceed further.
 
 ### U3.3 If LINKFIELD_PRESENT = "no"
 
+#### Re-enable plugins disabled locally
+If `PLUGINS_TO_DISABLE_FOR_UPGRADE` in the state file is non-empty, re-enable
+each handle locally now — they were disabled in U1.2.5 only to get past the
+element-save phase of `php craft up`. Leaving them disabled silently breaks
+dev (SEO previews, search indexing, cache busting, etc.) for the rest of the
+smoke-test phase.
+
+Skip any handle whose plugin was removed by this upgrade (compare against
+plugins listed for removal in U1.5 / state file).
+```bash
+php craft plugin/enable <handle>
+```
+
+The corresponding production re-enable belongs in the deploy notes (see below).
+
 #### Remove stability flags (if added in U1.6)
 Check `composer.json` for `"minimum-stability"` and `"prefer-stable"`.
 If present, remove them, then:
@@ -286,65 +315,63 @@ where the fields are genuinely the same type and config. If any merges are
 accepted, commit the generated migration files and run `php craft up` in all
 other environments before deploying.
 
-#### Generate DEPLOY.md
-Ask: **How is code deployed to production?** (examples: git push + SSH, Laravel
-Forge, Ploi, Deployer, rsync, FTP, hosting panel). If unsure, default to generic
-SSH steps.
+#### Generate upgrade-deploy notes (optional)
+Assume the user already has a deploy process for this project. Do not produce
+a generic deploy runbook by default — most developers will find it duplicates
+their existing workflow and bury the upgrade-specific bits they actually need.
 
-Fill in the template below using values from the session and state file,
-then write it to the project root as `DEPLOY.md`.
+Ask: **Do you want upgrade-specific deploy notes generated, or do you already
+have a deploy process you'll integrate these changes into?** Default to the
+latter — only generate notes if the user opts in (e.g. new project, handoff,
+or unfamiliar deploy path).
+
+If notes are wanted, write to `CRAFT-5-UPGRADE-NOTES.md` (not `DEPLOY.md`) and
+include *only* the upgrade-specific deltas — not generic deploy steps. The
+template below is a starting point; trim ruthlessly to what is genuinely
+upgrade-specific.
 
 ```markdown
-# Craft 5 Production Deployment — [project name]
-Generated [date].
+# Craft 5 Upgrade Notes — [project name]
+Generated [date]. Integrate these deltas into your existing deploy process.
 
 ## Upgrade summary
-- Craft version: [version from U2.5]
-- Plugins updated: [list from U2.3]
+- Craft: [from version] → [version from U2.5]
+- Plugins updated: [list from U2.3 with version bumps]
+- Plugins removed: [list, or "none"]
 - Templates patched: [list, or "none"]
 - fields/auto-merge migration files committed: [yes / no]
+- Matching pre-upgrade code commit (rollback target): `[short SHA]`
+- Matching pre-upgrade DB backup (rollback target): `[path/filename]`
 
-## Deployment steps
-
-### 1. Deploy code
-[Deployment command/steps based on their method, e.g.:
-- Forge: trigger deploy via dashboard or `forge deploy <site-id>`
-- Git + SSH: `git push origin main` then `ssh user@host "cd /path && git pull"`
-- Generic SSH: `cd /path/to/site && git pull origin main`]
-
-### 2. Install dependencies
+## Production re-enable
+These plugins were disabled locally during the upgrade and must be re-enabled
+on production after `project-config/apply` completes. Skip any that were also
+removed by this upgrade.
 ```bash
-composer install --no-dev
-```
-
-### 3. Run Craft upgrade
-```bash
-php craft up
-php craft project-config/apply
-```
-
-### 4. Re-enable plugins disabled for the upgrade
-[If any plugins were disabled in U1.2.5, list them here with:]
-```bash
+[for each handle in PLUGINS_TO_DISABLE_FOR_UPGRADE that was NOT removed:]
 php craft plugin/enable <handle>
 ```
 
-### 5. Verify
-- [ ] Log into Craft CP — confirm Craft [version] in footer
-- [ ] Browse key page types in browser — confirm no errors
-- [ ] Check logs: `tail -n 50 storage/logs/web.log`
+## Post-deploy manual follow-up
+- [ ] Confirm Craft [version] in CP footer
+- [ ] Spot-check patched templates: [list 2–3 highest-traffic files]
+- [ ] Template extension collisions from preflight P1.9: [list, or "none"]
+- [ ] CKEditor visual diff if Redactor was converted: [yes/no]
 
-## Rollback
+## Rollback for this upgrade
+This upgrade migrates the DB schema. Restore code and DB to matching snapshots:
 ```bash
-git checkout [craft4-branch]
+# 1. Restore DB from the pre-upgrade backup listed above
+[DB import command] < [path to pre-upgrade backup]
+# 2. Restore code to the matching pre-upgrade commit
+git checkout [pre-upgrade SHA]
 composer install --no-dev
-php craft up
 ```
 ```
 
 ---
 
-**STOP. Present final report and DEPLOY.md (if generated).
+**STOP. Present final report and upgrade notes (if generated).
 Await confirmation or corrections.**
 
 ---

@@ -74,11 +74,12 @@ is empty, or whether fields have already been removed. Report and stop.
 Cross-reference the fields listed by the dry-run against the
 `LINKFIELD_INVENTORY` in the state file.
 
-**Every handle in the inventory must appear in the dry-run with a non-zero
-row count.** Discrepancies:
-- Handle in inventory but missing from dry-run → potential data-loss risk.
-  Investigate before proceeding.
-- Handle in dry-run not in inventory → unexpected but not blocking; note it.
+- A handle present in the inventory but **absent** from the dry-run is a
+  potential data-loss risk — investigate before proceeding.
+- A handle present in both with a **zero row count** just means that field
+  has no entered content — not a problem.
+- A handle present in the dry-run but **not in the inventory** is unexpected
+  but not blocking; note it.
 
 **columnSuffix fields — explicit check:**
 If any field in the inventory has a `columnSuffix` value, confirm it appears
@@ -145,7 +146,9 @@ Confirm via:
 ```bash
 <MYSQL_CMD> <DB_NAME> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%_v2' ORDER BY handle;"
 ```
-(Substitute `MYSQL_CMD` and `DB_NAME` from the state file.)
+(Substitute `MYSQL_CMD` and `DB_NAME` from the state file. Adjust the
+`craft_` prefix to match your `CRAFT_DB_TABLE_PREFIX` — empty prefix means
+bare table names like `fields`, `elements_sites`, `fieldlayouts`.)
 
 Each `_v2` field should correspond unambiguously to one entry in the inventory.
 If any `_v2` handle is still ambiguous (e.g. `handle2_v2`, `handle3_v2` from
@@ -162,6 +165,10 @@ map by field `name` before proceeding.
 `run-direct` prints layout element UIDs for each `_v2` field at the end of its
 output. `elements_sites.content` is keyed by **field layout element UID**, not
 field UID — direct queries against field UIDs will return 0 rows.
+
+Adjust the `craft_` prefix in the queries below to match your
+`CRAFT_DB_TABLE_PREFIX` (empty prefix → bare `fields`, `elements_sites`,
+`fieldlayouts`).
 
 Use the printed UIDs to spot-check migrated content:
 ```sql
@@ -315,6 +322,12 @@ add them:
 php craft project-config/rebuild
 ```
 
+Expect another large, noisy diff here (100+ files is normal — entry types
+created from Super Table block types, renamed fields, layout changes, plus
+the usual YAML key-order normalisation). Combined with the U1.2 rebuild, the
+upgrade commit history will look heavy; do not try to review every YAML key.
+Commit with a descriptive message and move on.
+
 ### L4.2 Apply project config
 ```bash
 php craft project-config/apply
@@ -350,6 +363,22 @@ where the fields are genuinely the same type and config. If any merges are
 accepted, commit the generated migration files and run `php craft up` in all
 other environments before deploying.
 
+### L4.6 Re-enable plugins disabled locally
+If `PLUGINS_TO_DISABLE_FOR_UPGRADE` in the state file is non-empty, re-enable
+each handle locally now — they were disabled in U1.2.5 only to get past the
+element-save phases of `php craft up` and the linkfield migration. Leaving
+them disabled silently breaks dev (SEO previews, search indexing, cache
+busting, etc.) for the rest of the smoke-test phase.
+
+Skip any handle whose plugin was removed during this upgrade (e.g.
+`typedlinkfield` was removed in L4.1; do not try to re-enable it). Compare
+against composer-removed plugins before running.
+```bash
+php craft plugin/enable <handle>
+```
+
+The corresponding production re-enable belongs in the deploy notes (L5.2).
+
 ---
 
 **STOP. Report all cleanup outputs. Wait for confirmation before Block L5.**
@@ -378,88 +407,77 @@ Produce a structured summary:
     unmigratable (only if not remediated in preflight — manual re-entry required)
   - Re-enable any plugins listed in `PLUGINS_TO_DISABLE_FOR_UPGRADE` on production
 
-### L5.2 Generate DEPLOY.md
+### L5.2 Generate upgrade-deploy notes (optional)
 
-Ask: **How is code deployed to production?** (examples: git push + SSH, Laravel
-Forge, Ploi, Deployer, rsync, FTP, hosting panel). Ask about the deployment
-method before filling in the template.
+Assume the user already has a deploy process for this project. Do not produce
+a generic deploy runbook by default — most developers will find it duplicates
+their existing workflow and bury the upgrade-specific bits they actually need.
 
-Fill in the template below using values from the state file and session,
-then write it to the project root as `DEPLOY.md`.
+Ask: **Do you want upgrade-specific deploy notes generated, or do you already
+have a deploy process you'll integrate these changes into?** Default to the
+latter — only generate notes if the user opts in (e.g. new project, handoff,
+or unfamiliar deploy path).
+
+If notes are wanted, write to `CRAFT-5-UPGRADE-NOTES.md` (not `DEPLOY.md`) and
+include *only* the upgrade-specific deltas — not generic deploy steps. The
+template below is a starting point; trim the generic deploy/maintenance/import
+steps if the user already handles them, and keep only the upgrade-specific
+sections (plugin re-enables, skipped link rows, patched templates, rollback
+notes specific to this upgrade).
 
 ```markdown
-# Craft 5 Production Deployment — [project name]
-Generated [date].
+# Craft 5 Upgrade Notes — [project name]
+Generated [date]. Integrate these deltas into your existing deploy process.
 
 ## Upgrade summary
-- Craft version: [version]
+- Craft: [from version] → [to version]
+- Plugins updated: [list with version bumps]
+- Plugins removed: [e.g. sebastianlenz/linkfield, vendor/typedlinkfield]
 - Linkfield fields migrated: [e.g. linkUrl → linkUrl_v2, primaryLink → primaryLink_v2]
 - Templates patched: [list of files, or "none"]
 - fields/auto-merge migration files committed: [yes / no]
 
-## ⚠ Content delta warning
-This deployment replaces the production database with the local migrated
-database. Any content added to production after [date of original DB snapshot]
-will be overwritten. Put production in maintenance mode before pushing the DB.
+## ⚠ This release replaces the production DB
+The linkfield migration runs locally and rewrites element field data. The
+production DB must be replaced from the migrated local dump — `php craft up`
+on production will not reproduce the migration. Schedule maintenance and pin
+the matching pre-upgrade backup before importing.
 
-## Pre-deployment checklist
-- [ ] Local site fully verified — all link field entries display correctly in browser
-- [ ] All code committed (modules/, config/project/, templates, composer.json/lock)
-- [ ] Fresh production DB backup taken and stored safely off-server
-- [ ] Maintenance window communicated to content editors
+- Local Craft 5 DB dump for import: `[MYSQL_CMD] [DB_NAME] > ~/Desktop/[project]-craft5-[date].sql`
+- Matching pre-upgrade backup (rollback target): `[path/filename]`
+- Matching pre-upgrade code commit (rollback target): `[short SHA]`
 
-## Deployment steps
-
-### 1. Export local Craft 5 database
+## Production re-enable
+These plugins were disabled locally during the upgrade and must be re-enabled
+on production after `project-config/apply` completes. Skip any that were also
+removed by this upgrade.
 ```bash
-[MYSQL_CMD] [DB_NAME] > ~/Desktop/[project]-craft5-[date].sql
-```
-
-### 2. Enable maintenance mode on production
-[Step based on their deployment method, e.g.:
-- Forge / Ploi: enable maintenance toggle in hosting panel
-- Generic: create a `storage/maintenance.html` file or return 503 via server config]
-
-### 3. Deploy code to production
-[Deployment steps based on their method]
-
-### 4. Install dependencies
-```bash
-composer install --no-dev
-```
-
-### 5. Import migrated database to production
-[DB import steps based on their hosting environment, e.g.:
-- SSH + mysql: `mysql -u user -p db_name < craft5-migrated.sql`
-- Hosting panel: use DB import tool
-- TablePlus / Sequel Pro: connect to production DB, run File > Import]
-
-### 6. Run Craft upgrade
-```bash
-php craft up
-php craft project-config/apply
-```
-
-### 7. Re-enable plugins disabled for the upgrade
-[If any plugins were listed in PLUGINS_TO_DISABLE_FOR_UPGRADE:]
-```bash
+[for each handle in PLUGINS_TO_DISABLE_FOR_UPGRADE that was NOT removed:]
 php craft plugin/enable <handle>
 ```
 
-### 8. Verify
-- [ ] Log into Craft CP — confirm Craft [version] in footer
-- [ ] Open an entry using field [first _v2 handle] — confirm link renders correctly
-- [ ] Load a URL from a patched template — confirm no errors
-- [ ] Check logs: `tail -n 50 storage/logs/web.log`
+## Post-deploy manual follow-up
+- [ ] Spot-check patched templates: [list 2–3 highest-traffic files from Templates patched]
+- [ ] Open an entry using field `[first _v2 handle]` in the CP — confirm link renders
+- [ ] Re-enter content for link rows skipped during migration:
+  - `user` link type rows: [count or "none"] (no native equivalent)
+  - `tel` link type rows: [count or "none"] (re-enter as URL with `tel:+...` prefix)
+- [ ] Template extension collisions from preflight P1.9: [list, or "none"]
+- [ ] `columnSuffix` fields — verify data in CP: [list, or "none"]
+- [ ] Super Table single-row access patterns now needing `.one()`: [list, or "none"]
+- [ ] Any `_v2` fields not yet visible in entry-type layouts — add via CP
+- [ ] CKEditor visual diff if Redactor was converted (L4.4): [yes/no]
 
-### 9. Exit maintenance mode
-[Reverse of step 2]
-
-## Rollback
-Restore the production backup from the pre-deployment checklist:
+## Rollback for this upgrade
+This upgrade is destructive (DB schema + content). Generic git-revert is not
+sufficient — restore both code and DB to matching snapshots:
 ```bash
-[DB import command] < /path/to/craft4-production-backup.sql
-git checkout [craft4-branch] && composer install --no-dev && php craft up
+# 1. Restore DB from the pre-upgrade backup
+[DB import command] < [path to pre-upgrade backup from "Upgrade summary" above]
+# 2. Restore code to the matching pre-upgrade commit
+git checkout [pre-upgrade SHA]
+composer install --no-dev
+php craft up    # no-op on Craft 4 schema
 ```
 ```
 

@@ -36,11 +36,14 @@ findings, and wait for explicit confirmation before proceeding.**
 ## BLOCK P1 — Audit (read-only)
 
 ### P1.1 Craft and PHP version
-Ask the user to provide:
-- The current Craft CMS version (e.g. "4.12.2")
-- The PHP version in use (e.g. "8.2.1")
+Record:
+- The current Craft CMS version. Source it from `composer.lock` (search for
+  `"name": "craftcms/cms"` and read the adjacent `version` field) or
+  `composer show craftcms/cms`. **Do not use `php craft --version`** — that
+  is not a valid Craft CLI command and exits with code 1.
+- The PHP version in use (`php --version`).
 
-Record both. Flag PHP below 8.2 as a blocker.
+Flag PHP below 8.2 as a blocker.
 
 ### P1.2 Database engine and connection
 Check `.env` and `config/db.php` for `CRAFT_DB_DRIVER`. Confirm MySQL.
@@ -134,10 +137,15 @@ linkfield handle. Use this list (not just `DEPRECATED_API_FILES`) as the
 `--files` argument to `patch-templates.py` in `craft-5-linkfield` Block L3.
 
 **After running — P1.12 note:**
-`PLUGINS_TO_DISABLE_FOR_UPGRADE` lists plugins with `afterSave*` event hooks.
-These must be disabled before U1.2 — `fix-field-layout-uids` triggers many
-element saves, and deploy-side hooks with environment-specific paths will fail.
-Add a re-enable instruction to `DEPLOY.md` in U3/L5.
+`PLUGINS_TO_DISABLE_FOR_UPGRADE` lists Craft plugin handles for any plugin
+(or any plugin's bundled vendor library) that registers `afterSave*` event
+hooks. The audit resolves vendor libraries to their host plugin's handle by
+inspecting `composer.json` files under `vendor/`, so values can be passed
+directly to `php craft plugin/disable`. These must be disabled before U1.2 —
+`fix-field-layout-uids` triggers many element saves, and deploy-side hooks
+with environment-specific paths will fail. Each handle is re-enabled locally
+at the end of the upgrade (U3.3 / L4.6) and listed in the production deploy
+notes (if generated in U3.3 / L5.2).
 
 ### P1.9 Template extension collisions
 Search `templates/` for directories containing both a `.twig` and `.html` file
@@ -297,10 +305,12 @@ BOOTSTRAP_CUSTOMISATIONS:
   - <description or "(none)">
 
 ## Plugins to disable for upgrade
-<!-- From P1.12: plugins with afterSave* hooks that will fail in dev during U1.2. -->
-<!-- Disable before U1.2; re-enable in DEPLOY.md for production. -->
+<!-- From P1.12: Craft plugin handles for plugins (and plugins whose bundled -->
+<!-- vendor library) register afterSave* hooks that will fail in dev during U1.2. -->
+<!-- The audit script resolves vendor libraries to their host plugin handle -->
+<!-- automatically. Disable before U1.2; re-enable in DEPLOY.md for production. -->
 PLUGINS_TO_DISABLE_FOR_UPGRADE:
-  - <package-handle>  # reason: <short note>
+  - <plugin-handle>  # afterSave* registered in <package-name>
 
 ## Composer hook
 COMPOSER_POST_UPDATE_HOOK: yes|no

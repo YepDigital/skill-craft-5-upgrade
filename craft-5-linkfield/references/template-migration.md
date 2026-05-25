@@ -31,7 +31,10 @@ the mapping should be strictly 1:1 — no ambiguous deduplication suffixes
 (no `handle2_v2`, `handle3_v2`). Verify this in Block L2.2 before patching.
 
 If any ambiguous `_v2` handles remain (e.g. from a project that skipped
-preflight), resolve them by field `name` before patching templates:
+preflight), resolve them by field `name` before patching templates.
+
+(Adjust the `craft_` prefix to match your `CRAFT_DB_TABLE_PREFIX` — empty
+prefix means bare `fields`.)
 
 ```bash
 <MYSQL_CMD> <DB_NAME> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%_v2' ORDER BY handle;"

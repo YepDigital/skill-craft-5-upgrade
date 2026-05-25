@@ -65,8 +65,15 @@ API_SUBSTITUTIONS = [
 
 # Inline replacement for .getLinkAttributes() — avoids requiring a macro file.
 # Replaces `<expr>.getLinkAttributes()` with the href + target attributes.
+#
+# Optional `{{ … }}` and `|raw` are consumed when present so calls already
+# inside Twig output delimiters (e.g. `<a {{ x.getLinkAttributes() }}>`) are
+# replaced without producing nested `{{ … {{ … }} … }}`.
 _LINKATTR_INLINE_PATTERN = re.compile(
-    r'([\w.\[\]\'\"]+)\.getLinkAttributes\(\)'
+    r'(?:\{\{\s*)?'                              # optional opening {{
+    r'([\w.\[\]\'\"]+)\.getLinkAttributes\(\)'   # the call
+    r'(?:\s*\|\s*raw)?'                          # optional |raw filter
+    r'(?:\s*\}\})?'                              # optional closing }}
 )
 
 
@@ -77,7 +84,13 @@ def apply_api_substitutions(content):
 
 
 def apply_linkattributes(content, mode='inline'):
-    """Replace .getLinkAttributes() calls."""
+    """Replace .getLinkAttributes() calls.
+
+    Inline mode emits raw HTML/Twig (href="…"{% if … %} … {% endif %}) so it
+    is correct both for the bare HTML-attribute form
+    (`<a {{ x.getLinkAttributes() }}>`) and the older raw-call form. The
+    pattern consumes the surrounding {{ }} when present.
+    """
     if mode == 'inline':
         def _replace(m):
             expr = m.group(1)
@@ -146,40 +159,46 @@ def apply_null_guards(content, handles):
     """
     Apply four documented null-guard patterns for migrated linkfield handles.
     Runs after handle renames, so targets the _v2 forms.
+
+    Each pattern allows an optional dotted-path prefix on the handle
+    (`(?:\\w+\\.)*`) so Matrix-loop accesses like `item.foo_v2.type` match
+    in addition to bare `foo_v2.type`.
+
     These are opt-in (--null-guards) to keep default diffs minimal.
     """
     for old, new in handles.items():
-        # Pattern 1: `if X.type == "..."` → `if X and X.type == "..."`
-        # Matches `if <new>.type` not already preceded by `and <new>`
+        prefix = r'(?:\w+\.)*'
+
+        # Pattern 1: `if [path.]X.type == "..."` → `if [path.]X and [path.]X.type == "..."`
         content = re.sub(
-            r'\bif\s+(' + re.escape(new) + r')\.type\b(?!\s)',
+            r'\bif\s+(' + prefix + re.escape(new) + r')\.type\b(?!\s)',
             lambda m: f'if {m.group(1)} and {m.group(1)}.type',
             content
         )
         content = re.sub(
-            r'\bif\s+(' + re.escape(new) + r')\.type\s*==',
+            r'\bif\s+(' + prefix + re.escape(new) + r')\.type\s*==',
             lambda m: f'if {m.group(1)} and {m.group(1)}.type ==',
             content
         )
 
-        # Pattern 2: `href="{{ X.url }}"` inside elseif → `href="{{ X ? X.url : '' }}"`
+        # Pattern 2: `href="{{ [path.]X.url }}"` → `href="{{ [path.]X ? [path.]X.url : '#' }}"`
         content = re.sub(
-            r'href="\{\{\s*(' + re.escape(new) + r')\.url\s*\}\}"',
+            r'href="\{\{\s*(' + prefix + re.escape(new) + r')\.url\s*\}\}"',
             lambda m: f'href="{{{{ {m.group(1)} ? {m.group(1)}.url : \'#\' }}}}"',
             content
         )
 
-        # Pattern 3: `?? X.element.title ?? null` → `?? (X.element ? X.element.title : null)`
+        # Pattern 3: `?? [path.]X.element.attr ?? null` → `?? ([path.]X.element ? [path.]X.element.attr : null)`
         content = re.sub(
-            r'\?\?\s*(' + re.escape(new) + r')\.element\.(\w+)\s*\?\?\s*null',
+            r'\?\?\s*(' + prefix + re.escape(new) + r')\.element\.(\w+)\s*\?\?\s*null',
             lambda m: f'?? ({m.group(1)}.element ? {m.group(1)}.element.{m.group(2)} : null)',
             content
         )
 
-        # Pattern 4: `entry.slug == X.element.slug` → `X.element and (entry.slug == X.element.slug)`
+        # Pattern 4: `entry.slug == [path.]X.element.slug` → `[path.]X.element and (entry.slug == [path.]X.element.slug)`
         content = re.sub(
-            r'(\w+\.\w+)\s*==\s*(' + re.escape(new) + r')\.element\.(\w+)',
-            lambda m: f'{m.group(2)}.element and ({m.group(1)} == {m.group(2)}.element.{m.group(3)}',
+            r'(\w+\.\w+)\s*==\s*(' + prefix + re.escape(new) + r')\.element\.(\w+)',
+            lambda m: f'{m.group(2)}.element and ({m.group(1)} == {m.group(2)}.element.{m.group(3)})',
             content
         )
 

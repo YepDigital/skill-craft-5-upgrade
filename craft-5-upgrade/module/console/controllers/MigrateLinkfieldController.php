@@ -121,10 +121,18 @@ class MigrateLinkfieldController extends Controller
 
             $this->addFieldToLayouts($oldField, $newField);
 
-            [$migrated, $skipped] = $this->migrateFieldData($oldField, $newField);
+            [$migrated, $skipReasons] = $this->migrateFieldData($oldField, $newField);
+            $skipped = array_sum($skipReasons);
 
-            $summary[$oldHandle] = ['migrated' => $migrated, 'skipped' => $skipped, 'status' => 'OK'];
-            $this->stdout("  Migrated: {$migrated}  Skipped: {$skipped}\n", Console::FG_GREEN);
+            $summary[$oldHandle] = [
+                'migrated' => $migrated,
+                'skipped' => $skipped,
+                'skipReasons' => $skipReasons,
+                'status' => 'OK',
+            ];
+            $breakdown = $this->formatSkipBreakdown($skipReasons);
+            $detail = $breakdown ? " ({$breakdown})" : '';
+            $this->stdout("  Migrated: {$migrated}  Skipped: {$skipped}{$detail}\n", Console::FG_GREEN);
 
             if ($this->cleanup) {
                 $this->cleanupOldField($oldField);
@@ -244,10 +252,18 @@ class MigrateLinkfieldController extends Controller
                 [':fieldId' => $oldId]
             )->queryAll();
 
-            [$migrated, $skipped] = $this->migrateRowsDirect($rows, $info['newField']->handle);
+            [$migrated, $skipReasons] = $this->migrateRowsDirect($rows, $info['newField']->handle);
+            $skipped = array_sum($skipReasons);
 
-            $summary[$info['handle']] = ['migrated' => $migrated, 'skipped' => $skipped, 'status' => 'OK'];
-            $this->stdout("  Migrated: {$migrated}  Skipped: {$skipped}\n", Console::FG_GREEN);
+            $summary[$info['handle']] = [
+                'migrated' => $migrated,
+                'skipped' => $skipped,
+                'skipReasons' => $skipReasons,
+                'status' => 'OK',
+            ];
+            $breakdown = $this->formatSkipBreakdown($skipReasons);
+            $detail = $breakdown ? " ({$breakdown})" : '';
+            $this->stdout("  Migrated: {$migrated}  Skipped: {$skipped}{$detail}\n", Console::FG_GREEN);
 
             if ($this->cleanup) {
                 $this->stdout("  [Cleanup] Deleting zombie field '{$info['handle']}' (ID: {$oldId})...\n", Console::FG_YELLOW);
@@ -421,6 +437,10 @@ class MigrateLinkfieldController extends Controller
                 $this->stdout("  Updated '{$newHandle}' settings (showLabelField / target).\n");
             }
             $this->stdout("  Native field '{$newHandle}' already exists. Reusing.\n");
+            // Still add the existing _v2 field to THIS source field's layouts.
+            // Without this, second-and-subsequent source fields sharing a target
+            // handle silently no-op every saveElement (target not in source's layout).
+            $this->addFieldToLayoutsById($oldId, $existing);
             return $existing;
         }
 
@@ -602,14 +622,14 @@ class MigrateLinkfieldController extends Controller
      * and the exception is caught silently — resulting in zero rows migrated
      * with no visible error.
      *
-     * @return array{int, int} [migrated, skipped]
+     * @return array{int, array<string,int>} [migrated, skipReasons]
      */
     private function migrateFieldData(
         \lenz\linkfield\fields\LinkField $oldField,
         NativeLinkField $newField
     ): array {
         $migrated = 0;
-        $skipped  = 0;
+        $skipReasons = $this->emptySkipReasons();
 
         $rows = Craft::$app->getDb()->createCommand(
             'SELECT [[elementId]], [[siteId]], [[type]], [[linkedUrl]], [[linkedId]], [[payload]]
@@ -627,29 +647,22 @@ class MigrateLinkfieldController extends Controller
                 );
 
                 if (!$element) {
-                    $skipped++;
-                    $this->stdout(
-                        "  [Skip] Element #{$row['elementId']} site #{$row['siteId']} — not found.\n",
-                        Console::FG_YELLOW
-                    );
+                    $reason = $this->elementSkipReason((int)$row['elementId']);
+                    $skipReasons[$reason]++;
                     continue;
                 }
 
                 $mapped = $this->mapDbRow($row);
 
                 if ($mapped === null) {
-                    $skipped++;
-                    $this->stdout(
-                        "  [Skip] Element #{$row['elementId']} — unmappable type '{$row['type']}'.\n",
-                        Console::FG_YELLOW
-                    );
+                    $skipReasons['unmappable_type']++;
                     continue;
                 }
 
                 $element->setFieldValue($newField->handle, $mapped);
 
                 if (!Craft::$app->getElements()->saveElement($element, false)) {
-                    $skipped++;
+                    $skipReasons['save_failed']++;
                     $this->stderr(
                         "  [ERROR] Element #{$element->id} save failed: " .
                         implode(', ', $element->getFirstErrors()) . "\n",
@@ -661,7 +674,7 @@ class MigrateLinkfieldController extends Controller
                 $migrated++;
 
             } catch (\Throwable $e) {
-                $skipped++;
+                $skipReasons['error']++;
                 $this->stderr(
                     "  [ERROR] Element #{$row['elementId']}: " . $e->getMessage() . "\n",
                     Console::FG_RED
@@ -669,7 +682,7 @@ class MigrateLinkfieldController extends Controller
             }
         }
 
-        return [$migrated, $skipped];
+        return [$migrated, $skipReasons];
     }
 
     /**
@@ -764,26 +777,33 @@ class MigrateLinkfieldController extends Controller
      * Migrate rows from lenz_linkfield to a target field handle, without needing
      * the old field as a typed object. Used by actionRunDirect().
      *
-     * @return array{int, int} [migrated, skipped]
+     * @return array{int, array<string,int>} [migrated, skipReasons]
      */
     private function migrateRowsDirect(array $rows, string $newHandle): array
     {
         $migrated = 0;
-        $skipped  = 0;
+        $skipReasons = $this->emptySkipReasons();
 
         foreach ($rows as $row) {
             try {
                 $mapped = $this->mapDbRow($row);
-                if ($mapped === null) { $skipped++; continue; }
+                if ($mapped === null) {
+                    $skipReasons['unmappable_type']++;
+                    continue;
+                }
 
                 $element = Craft::$app->getElements()->getElementById(
                     (int)$row['elementId'], null, (int)$row['siteId']
                 );
-                if (!$element) { $skipped++; continue; }
+                if (!$element) {
+                    $reason = $this->elementSkipReason((int)$row['elementId']);
+                    $skipReasons[$reason]++;
+                    continue;
+                }
 
                 $element->setFieldValue($newHandle, $mapped);
                 if (!Craft::$app->getElements()->saveElement($element, false)) {
-                    $skipped++;
+                    $skipReasons['save_failed']++;
                     $this->stderr(
                         "  [ERROR] Element #{$element->id}: " . implode(', ', $element->getFirstErrors()) . "\n",
                         Console::FG_RED
@@ -792,7 +812,7 @@ class MigrateLinkfieldController extends Controller
                 }
                 $migrated++;
             } catch (\Throwable $e) {
-                $skipped++;
+                $skipReasons['error']++;
                 $this->stderr(
                     "  [ERROR] Element #{$row['elementId']}: " . $e->getMessage() . "\n",
                     Console::FG_RED
@@ -800,7 +820,54 @@ class MigrateLinkfieldController extends Controller
             }
         }
 
-        return [$migrated, $skipped];
+        return [$migrated, $skipReasons];
+    }
+
+    /**
+     * Empty skip-reason tally — categories tracked per field.
+     *
+     * @return array<string,int>
+     */
+    private function emptySkipReasons(): array
+    {
+        return [
+            'softdeleted'     => 0,
+            'no_element'      => 0,
+            'unmappable_type' => 0,
+            'save_failed'     => 0,
+            'error'           => 0,
+        ];
+    }
+
+    /**
+     * Distinguish "element soft-deleted" from "element does not exist".
+     * getElementById returns null in both cases; the postmortem flagged the
+     * silent conflation as a class of false-positive failure.
+     */
+    private function elementSkipReason(int $elementId): string
+    {
+        // queryScalar returns: the dateDeleted value if the row exists, NULL if
+        // the row exists but isn't soft-deleted, false if no row at all.
+        $dateDeleted = Craft::$app->getDb()->createCommand(
+            'SELECT [[dateDeleted]] FROM {{%elements}} WHERE [[id]] = :id',
+            [':id' => $elementId]
+        )->queryScalar();
+        return ($dateDeleted !== false && $dateDeleted !== null) ? 'softdeleted' : 'no_element';
+    }
+
+    /**
+     * Render non-zero skip categories as a compact breakdown string.
+     * Example: "softdeleted: 144, no_element: 30"
+     */
+    private function formatSkipBreakdown(array $skipReasons): string
+    {
+        $parts = [];
+        foreach ($skipReasons as $reason => $count) {
+            if ($count > 0) {
+                $parts[] = "{$reason}: {$count}";
+            }
+        }
+        return implode(', ', $parts);
     }
 
     // -------------------------------------------------------------------------
@@ -818,6 +885,12 @@ class MigrateLinkfieldController extends Controller
             $statusColor = $row['status'] === 'OK' ? Console::FG_GREEN : Console::FG_RED;
             $this->stdout(sprintf("%-28s  %-10s  %-10s  ", $handle, $row['migrated'], $row['skipped']));
             $this->stdout($row['status'] . "\n", $statusColor);
+            if (!empty($row['skipReasons'])) {
+                $breakdown = $this->formatSkipBreakdown($row['skipReasons']);
+                if ($breakdown) {
+                    $this->stdout("    ↳ skipped: {$breakdown}\n", Console::FG_YELLOW);
+                }
+            }
         }
     }
 
