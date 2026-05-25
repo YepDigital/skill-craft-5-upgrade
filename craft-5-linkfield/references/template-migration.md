@@ -175,6 +175,54 @@ Always call `.one()` before accessing sub-fields:
 
 ---
 
+## URL field auto-promotion
+
+Craft 5's `php craft up` silently promotes `craft\fields\Url` fields to
+`craft\fields\Link` (URL-only variant). These are **not** linkfields — they are
+plain URL fields whose runtime type changes from `string` to `LinkData`.
+
+The promoted `LinkData` object implements `__toString()`, so `{{ entry.x }}`
+and `{{ entry.x.url }}` both output the URL. However, `|length` and `in` tests
+operate differently on objects vs strings and may produce unexpected results.
+
+Preflight P1.7c lists candidate fields in `URL_PROMOTION_CANDIDATES`.
+After `php craft up`, L2.3 queries the DB to confirm which candidates were
+actually promoted and writes them to `## URL fields actually promoted` in the
+state file. Use that confirmed list when fixing templates in L3.3.
+
+### Breaking patterns and fixes
+
+| Pattern | Problem | Fix |
+|---|---|---|
+| `{% if entry.x\|length %}` | `\|length` on object may not behave like `\|length` on string | `{% if entry.x.url\|length %}` |
+| `{% if 'foo' in entry.x %}` | `in` membership test on object vs string | `{% if 'foo' in entry.x.url %}` |
+
+Patterns that continue to work unchanged:
+
+| Pattern | Why it works |
+|---|---|
+| `{{ entry.x }}` | `LinkData.__toString()` returns the URL string |
+| `{{ entry.x.url }}` | Explicit; preferred for clarity |
+
+### Example
+
+```twig
+{# Before (field was craft\fields\Url) #}
+{% if entry.mapLink|length %}
+  <a href="{{ entry.mapLink }}">View map</a>
+{% endif %}
+
+{# After (field promoted to craft\fields\Link) #}
+{% if entry.mapLink.url|length %}
+  <a href="{{ entry.mapLink.url }}">View map</a>
+{% endif %}
+```
+
+These fixes are **not** applied by `patch-templates.py` — apply them manually
+using the file/line references in `URL_PROMOTION_CANDIDATES`.
+
+---
+
 ## Template editing approach
 
 **Use the patcher script first** (`scripts/patch-templates.py`).

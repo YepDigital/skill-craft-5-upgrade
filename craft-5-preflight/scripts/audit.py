@@ -135,6 +135,7 @@ def none_found(): print('  (none)')
 LF_TYPE = r'lenz\linkfield\fields\LinkField'
 ST_TYPE = r'verbb\supertable\fields\SuperTableField'
 MT_TYPE = r'craft\fields\Matrix'
+URL_TYPE = r'craft\fields\Url'
 
 
 # ── YAML file discovery and field collection ──────────────────────────────────
@@ -233,6 +234,32 @@ def _walk_block_types(data, filepath, is_st, parent_handle):
     return lf_fields, st_sub_handles
 
 
+def _load_st_external_blocks(config_dir):
+    """
+    Load Super Table block types from config/project/superTableBlockTypes/.
+
+    Newer Super Table releases store block types in per-file YAMLs here rather
+    than inline under the ST field's blockTypes: key. Each file references its
+    parent ST field UID via a 'field' (or 'fieldId') key.
+    Returns {parent_field_uid: {bt_uid: bt_data}}.
+    """
+    st_dir = config_dir / 'superTableBlockTypes'
+    result = defaultdict(dict)
+    if not st_dir.is_dir():
+        return result
+    for filepath, data in iter_config_yamls(st_dir):
+        parent_uid = (
+            data.get('field') or
+            data.get('fieldId') or
+            data.get('superTableFieldId')
+        )
+        if not parent_uid:
+            continue
+        bt_uid = Path(filepath).stem
+        result[str(parent_uid)][bt_uid] = data
+    return result
+
+
 def collect_all_fields(config_dir):
     """
     Walk all project config YAML files.
@@ -242,6 +269,7 @@ def collect_all_fields(config_dir):
     """
     lf_records = []
     st_sub_handles = []
+    st_external = _load_st_external_blocks(config_dir)
 
     for filepath, data in iter_config_yamls(config_dir):
         field_type = data.get('type', '') or ''
@@ -253,6 +281,22 @@ def collect_all_fields(config_dir):
                 _get_settings(data), filepath, 'top-level',
             ))
         elif field_type in (ST_TYPE, MT_TYPE):
+            # For Super Table fields, merge in any externally-stored block types.
+            # Newer ST releases store block types in superTableBlockTypes/<uid>.yaml
+            # rather than inline under blockTypes:, leaving the inline key empty.
+            if field_type == ST_TYPE and st_external:
+                field_uid = Path(filepath).stem
+                external_bts = st_external.get(field_uid)
+                if external_bts:
+                    inline_bts = data.get('blockTypes') or {}
+                    if not inline_bts:
+                        data = dict(data)
+                        data['blockTypes'] = external_bts
+                    else:
+                        merged = dict(inline_bts)
+                        merged.update(external_bts)
+                        data = dict(data)
+                        data['blockTypes'] = merged
             sub_lf, sub_st = _walk_block_types(
                 data, filepath, is_st=(field_type == ST_TYPE), parent_handle=parent_handle
             )
@@ -347,6 +391,113 @@ def run_p17b(lf_records):
                 info(f"      ({rec['filepath']})")
 
     return dupes
+
+
+# ── P1.7c – URL field promotion candidates ────────────────────────────────────
+
+def _collect_url_fields(config_dir):
+    """Collect all craft\\fields\\Url fields from project config."""
+    url_fields = []
+    for filepath, data in iter_config_yamls(config_dir):
+        if (data.get('type', '') or '') == URL_TYPE:
+            url_fields.append({
+                'handle': data.get('handle', '') or '',
+                'name': data.get('name', '') or '',
+                'filepath': filepath,
+                'breaking_refs': [],
+                'all_ref_files': set(),
+            })
+    return url_fields
+
+
+def _find_url_breaking_patterns(templates_dir, handle):
+    """
+    Scan templates for uses of a URL field handle that break when Craft 5
+    auto-promotes it from craft\\fields\\Url to craft\\fields\\Link.
+
+    Returns (breaking_hits, all_ref_files):
+      breaking_hits: list of (fpath, lineno, line, pattern_type)
+      all_ref_files: set of all template files that reference the handle at all
+    """
+    breaking_hits = []
+    all_ref_files = set()
+    if not templates_dir.is_dir():
+        return breaking_hits, all_ref_files
+
+    length_re = re.compile(re.escape(handle) + r'\s*\|length')
+    in_test_re = re.compile(r'\bin\s+\S*' + re.escape(handle) + r'\b')
+
+    for root, _, files in os.walk(str(templates_dir)):
+        for fname in sorted(files):
+            if not (fname.endswith('.twig') or fname.endswith('.html')):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                for lineno, line in enumerate(
+                    open(fpath, encoding='utf-8', errors='replace'), 1
+                ):
+                    if handle not in line:
+                        continue
+                    stripped = line.rstrip()
+                    all_ref_files.add(fpath)
+                    if length_re.search(line):
+                        breaking_hits.append((fpath, lineno, stripped, '|length'))
+                    elif in_test_re.search(line):
+                        breaking_hits.append((fpath, lineno, stripped, 'in-test'))
+            except (OSError, IOError):
+                pass
+
+    return breaking_hits, all_ref_files
+
+
+def run_p17c(url_fields, templates_dir):
+    section(r'P1.7c URL FIELDS — CANDIDATES FOR Craft 5 AUTO-PROMOTION TO craft\fields\Link')
+    if not url_fields:
+        info(r'No craft\fields\Url fields found in project config.')
+        return url_fields
+
+    info(r'Craft 5 auto-promotes craft\fields\Url to craft\fields\Link (URL-only variant).')
+    info('These are NOT linkfield fields — they are plain URL fields that change runtime type.')
+    print()
+
+    any_breaking = False
+    for field in url_fields:
+        handle = field['handle']
+        if not handle:
+            continue
+        breaking, ref_files = _find_url_breaking_patterns(templates_dir, handle)
+        field['breaking_refs'] = breaking
+        field['all_ref_files'] = ref_files
+
+        print()
+        found(f"handle: '{handle}'  [name: {field['name']!r}]")
+        info(f"  file: {field['filepath']}")
+
+        if breaking:
+            any_breaking = True
+            warn('  Breaking template patterns:')
+            for fpath, lineno, line, pat_type in breaking:
+                info(f'    [{pat_type}] {fpath}:{lineno}: {line.strip()}')
+        elif ref_files:
+            info(f'  No breaking patterns detected (handle referenced in {len(ref_files)} file(s)).')
+            for rf in sorted(ref_files)[:3]:
+                info(f'    {rf}')
+            if len(ref_files) > 3:
+                info(f'    ... and {len(ref_files) - 3} more')
+        else:
+            info('  No template references found.')
+
+    print()
+    if any_breaking:
+        warn('Breaking patterns above must be fixed manually after `php craft up`.')
+    warn('After promotion, bare access still works via __toString(), but use .url for clarity:')
+    warn(r"  {{ entry.x }}              — still works (LinkData __toString returns URL)")
+    warn(r"  {{ entry.x.url }}          — explicit, preferred")
+    warn(r"  {% if entry.x|length %}    → {% if entry.x.url|length %}")
+    warn(r"  {% if 'foo' in entry.x %}  → {% if 'foo' in entry.x.url %}")
+    warn('See craft-5-linkfield references/template-migration.md — URL field auto-promotion.')
+
+    return url_fields
 
 
 # ── P1.8 – Deprecated API calls and .with() ───────────────────────────────────
@@ -791,14 +942,16 @@ def main():
     # Collect field data from project config
     if config_dir.is_dir():
         lf_records, st_sub_handles = collect_all_fields(config_dir)
+        url_fields = _collect_url_fields(config_dir)
     else:
-        lf_records, st_sub_handles = [], []
-        print(f'\n[WARN] {config_dir} not found — P1.7/P1.7a/P1.7b sections skipped.')
+        lf_records, st_sub_handles, url_fields = [], [], []
+        print(f'\n[WARN] {config_dir} not found — P1.7/P1.7a/P1.7b/P1.7c sections skipped.')
 
     # ── Run all sections ──────────────────────────────────────────────────────
     run_p17(lf_records)
     run_p17a(st_sub_handles)
     run_p17b(lf_records)
+    url_fields = run_p17c(url_fields, templates_dir) or url_fields
     deprecated_files, with_files = run_p18(templates_dir)
     all_template_files = run_p18b(templates_dir, lf_records, deprecated_files, with_files)
     run_p1_bootstrap(project_root)
@@ -820,6 +973,27 @@ def main():
             types = ', '.join(rec['allowed_link_names']) if rec['allowed_link_names'] else '(all)'
             suffix = rec['column_suffix'] or 'none'
             print(f"| {rec['handle']} | {rec['name']} | {ctx} | {types} | {suffix} |")
+
+    print()
+    print('## URL field promotion candidates')
+    print('<!-- craft\\fields\\Url fields that Craft 5 auto-promotes to craft\\fields\\Link. -->')
+    print('<!-- Review breaking patterns; fix manually in L3 (see template-migration.md). -->')
+    print('URL_PROMOTION_CANDIDATES:')
+    active_url_fields = [f for f in url_fields if f.get('handle')]
+    if active_url_fields:
+        for f in active_url_fields:
+            print(f"  - handle: {f['handle']}")
+            print(f"    name: {f['name']!r}")
+            print(f"    file: {f['filepath']}")
+            brk = f.get('breaking_refs', [])
+            if brk:
+                print('    breaking_refs:')
+                for fpath, lineno, line, pat_type in brk:
+                    print(f'      - {fpath}:{lineno}: [{pat_type}] {line.strip()[:80]}')
+            else:
+                print('    breaking_refs: (none detected)')
+    else:
+        print('  (none)')
 
     print()
     print('DEPRECATED_API_FILES:')

@@ -91,7 +91,7 @@ php craft queue/info
 ```
 Flag any pending or reserved jobs as a blocker.
 
-### P1.7 / P1.7a / P1.7b / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 Audit script
+### P1.7 / P1.7a / P1.7b / P1.7c / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 Audit script
 Run from the project root:
 ```bash
 python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py
@@ -99,8 +99,9 @@ python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py
 
 This covers all areas in one pass:
 - **P1.7** — Linkfield field inventory (handle, name, enabled types, columnSuffix) — parsed correctly per field block, not by regex
-- **P1.7a** — Super Table duplicate field handles
+- **P1.7a** — Super Table duplicate field handles (reads both inline `blockTypes:` and `config/project/superTableBlockTypes/`)
 - **P1.7b** — Duplicate linkfield handles across non-ST contexts (top-level, matrix)
+- **P1.7c** — `craft\fields\Url` fields that Craft 5 will auto-promote to `craft\fields\Link`
 - **P1.8** — Deprecated API calls and `.with([` calls in templates
 - **P1.8b** — All template files referencing any linkfield handle (for the L3 patcher file list)
 - **P1.10b** — Non-standard customisations in `bootstrap.php` / `web/index.php`
@@ -112,6 +113,12 @@ Read the output and record all findings. The script prints a state file summary 
 **After running — P1.7a note:**
 List every duplicate Super Table sub-field handle found. These are remediated
 in Block P2.
+
+The audit now reads both the inline `blockTypes:` key on each ST field YAML
+**and** the separate `config/project/superTableBlockTypes/` directory used by
+newer Super Table releases. A "no duplicates found" result is therefore
+authoritative — if the directory does not exist at all, the audit notes that
+and ST sub-field detection is fully skipped.
 
 **Data loss risk from duplicate handles + linkfield data:**
 `getAllFields()` in the `craft-5-linkfield` migrator surfaces only one field
@@ -126,6 +133,24 @@ top-level field AND in a Matrix block sub-field) also trigger the same
 `getAllFields()` collision. These cannot be remediated by P2 (which targets
 ST sub-fields only) — document them in `NON_ST_DUPLICATE_HANDLES` and warn
 the user to verify the L2 `_v2` field count after migration.
+
+**After running — P1.7c note:**
+`URL_PROMOTION_CANDIDATES` lists every `craft\fields\Url` field in the project.
+Craft 5's `php craft up` silently promotes these to `craft\fields\Link`
+(URL-only variant). The runtime type changes from `string` to `LinkData`, which
+breaks templates that use:
+
+- `entry.x|length` — `|length` on the raw field (should become `entry.x.url|length`)
+- `'foo' in entry.x` — `in` membership test (should become `'foo' in entry.x.url`)
+
+Note: `{{ entry.x }}` still works because `LinkData.__toString()` returns the
+URL string — but `|length` and `in` tests behave differently against an object.
+Bare access is therefore not flagged as breaking.
+
+These fields are **not** linkfields and do not go through the `craft-5-linkfield`
+migration. Fixes must be applied manually in `craft-5-linkfield` Block L3.3,
+guided by the `URL_PROMOTION_CANDIDATES` and `## URL fields actually promoted`
+sections that L2.3 writes into the state file.
 
 **After running — columnSuffix note:**
 List any linkfield fields with a `columnSuffix` value. Record these in the
@@ -287,6 +312,17 @@ DB_CHARSET_EXISTING: <existing CRAFT_DB_CHARSET value, or "(none)">
 <!-- Verify _v2 field count matches source count in craft-5-linkfield Block L2. -->
 NON_ST_DUPLICATE_HANDLES:
   - handle: <name>, contexts: [<top-level / matrix:BlockType, ...>]
+
+## URL field promotion candidates
+<!-- craft\fields\Url fields Craft 5 auto-promotes to craft\fields\Link on php craft up. -->
+<!-- These are NOT linkfields. Fix breaking patterns manually in L3.3. -->
+<!-- L2.3 (craft-5-linkfield) writes a "URL fields actually promoted" block from the DB. -->
+URL_PROMOTION_CANDIDATES:
+  - handle: <handle>
+    name: '<field name>'
+    file: <config/project/fields/uid.yaml>
+    breaking_refs:
+      - <templates/path.twig:line: [pattern-type] line content>
 
 ## Template audit
 <!-- Use HANDLE_REFERENCE_FILES as the --files list for patch-templates.py in L3. -->
