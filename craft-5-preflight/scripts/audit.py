@@ -132,7 +132,10 @@ def none_found(): print('  (none)')
 
 # ── Field type constants ──────────────────────────────────────────────────────
 
-LF_TYPE = r'lenz\linkfield\fields\LinkField'
+LF_TYPES = (
+    r'lenz\linkfield\fields\LinkField',         # sebastianlenz/linkfield 2.x+
+    r'typedlinkfield\fields\LinkField',         # legacy pre-rename (Craft 3 era)
+)
 ST_TYPE = r'verbb\supertable\fields\SuperTableField'
 MT_TYPE = r'craft\fields\Matrix'
 URL_TYPE = r'craft\fields\Url'
@@ -174,7 +177,7 @@ def _parse_link_names(value):
     return []
 
 
-def _lf_record(handle, name, settings, filepath, context, parent_handle='', block_type_name=''):
+def _lf_record(handle, name, settings, filepath, context, parent_handle='', block_type_name='', field_type=''):
     return {
         'handle': handle,
         'name': name,
@@ -184,6 +187,7 @@ def _lf_record(handle, name, settings, filepath, context, parent_handle='', bloc
         'context': context,
         'parent_handle': parent_handle,
         'block_type_name': block_type_name,
+        'field_type': field_type,
     }
 
 
@@ -224,11 +228,11 @@ def _walk_block_types(data, filepath, is_st, parent_handle):
                     'block_type_name': bt_name,
                 })
 
-            if f_type == LF_TYPE:
+            if f_type in LF_TYPES:
                 lf_fields.append(_lf_record(
                     f_handle, f_data.get('name', '') or '',
                     _get_settings(f_data), filepath, ctx,
-                    parent_handle, bt_name,
+                    parent_handle, bt_name, f_type,
                 ))
 
     return lf_fields, st_sub_handles
@@ -275,10 +279,11 @@ def collect_all_fields(config_dir):
         field_type = data.get('type', '') or ''
         parent_handle = data.get('handle', '?') or '?'
 
-        if field_type == LF_TYPE:
+        if field_type in LF_TYPES:
             lf_records.append(_lf_record(
                 data.get('handle', ''), data.get('name', ''),
                 _get_settings(data), filepath, 'top-level',
+                field_type=field_type,
             ))
         elif field_type in (ST_TYPE, MT_TYPE):
             # For Super Table fields, merge in any externally-stored block types.
@@ -309,10 +314,20 @@ def collect_all_fields(config_dir):
 # ── P1.7 – Linkfield inventory ────────────────────────────────────────────────
 
 def run_p17(lf_records):
-    section(r'P1.7 LINKFIELD FIELDS (lenz\linkfield\fields\LinkField)')
+    section(r'P1.7 LINKFIELD FIELDS (lenz\linkfield or typedlinkfield)')
     if not lf_records:
         none_found()
         return
+
+    legacy_ns = r'typedlinkfield\fields\LinkField'
+    has_legacy = any(rec.get('field_type') == legacy_ns for rec in lf_records)
+    if has_legacy:
+        warn('Legacy typedlinkfield namespace detected in project config.')
+        info(f'  One or more fields are still stored as {legacy_ns}.')
+        info('  Likely a Craft 3 → 4 carry-over: the plugin renamed to')
+        info(r'  lenz\linkfield\fields\LinkField but the YAML was never re-saved.')
+        info('  No action needed pre-upgrade — the craft-5-upgrade composer bump')
+        info('  to ^3.0.0-beta + `php craft up` rewrite the field-type string.')
 
     for rec in lf_records:
         print()
@@ -327,6 +342,8 @@ def run_p17(lf_records):
         info(f"  columnSuffix: {suffix if suffix else '(none)'}")
         links = rec['allowed_link_names']
         info(f"  enabledTypes: {', '.join(links) if links else '(all / not restricted)'}")
+        if rec.get('field_type') == legacy_ns:
+            info('  namespace:    typedlinkfield (legacy)')
         info(f"  file: {rec['filepath']}")
 
 
