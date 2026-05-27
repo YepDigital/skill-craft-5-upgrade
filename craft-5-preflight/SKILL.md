@@ -91,7 +91,7 @@ php craft queue/info
 ```
 Flag any pending or reserved jobs as a blocker.
 
-### P1.7 / P1.7a / P1.7b / P1.7c / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 Audit script
+### P1.7 / P1.7a / P1.7b / P1.7c / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 / P1.14 Audit script
 Run from the project root:
 ```bash
 python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py
@@ -107,6 +107,7 @@ This covers all areas in one pass:
 - **P1.10b** — Non-standard customisations in `bootstrap.php` / `web/index.php`
 - **P1.12** — Vendor plugins with `afterSave*` event hooks
 - **P1.13** — `composer.json` `post-update-cmd` running `@craft-update`
+- **P1.14** — `craftcms/redactor` package + `craft\redactor\Field` field inventory (CKEditor conversion candidates)
 
 Read the output and record all findings. The script prints a state file summary at the end — use it directly in Block P3.
 
@@ -171,6 +172,24 @@ directly to `php craft plugin/disable`. These must be disabled before U1.2 —
 with environment-specific paths will fail. Each handle is re-enabled locally
 at the end of the upgrade (U3.3 / L4.6) and listed in the production deploy
 notes (if generated in U3.3 / L5.2).
+
+**After running — P1.14 note:**
+`REDACTOR_PACKAGE_PRESENT` and `REDACTOR_FIELDS` flag use of the abandoned
+`craftcms/redactor` plugin. Replacement is `craftcms/ckeditor`, which supports
+**both Craft 4 and Craft 5** and ships a conversion command
+(`php craft ckeditor/convert/redactor`).
+
+**Recommended order — convert on Craft 4 before the Craft 5 upgrade:**
+1. `composer require craftcms/ckeditor` (Craft 4 installs the 3.x line)
+2. `php craft ckeditor/convert/redactor`
+3. Visual-diff a sample of converted entries.
+4. `composer remove craftcms/redactor`
+5. Commit, then proceed with the Craft 5 upgrade as normal.
+
+Isolating the Redactor→CKEditor migration from the Craft 4→5 upgrade makes
+either failure easier to bisect. The existing post-upgrade conversion steps
+(upgrade U3.3 / linkfield L4.4) remain as a fallback if the user prefers to
+defer the swap; either path is valid.
 
 ### P1.9 Template extension collisions
 Search `templates/` for directories containing both a `.twig` and `.html` file

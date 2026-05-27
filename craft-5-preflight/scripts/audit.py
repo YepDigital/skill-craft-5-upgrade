@@ -3,7 +3,7 @@
 Craft 5 preflight audit script — replaces audit.sh
 Run from the project root:
     python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py [project_root]
-Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.8, P1.8b, P1.10b, P1.12, P1.13
+Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.8, P1.8b, P1.10b, P1.12, P1.13, P1.14
 """
 
 import argparse
@@ -139,6 +139,7 @@ LF_TYPES = (
 ST_TYPE = r'verbb\supertable\fields\SuperTableField'
 MT_TYPE = r'craft\fields\Matrix'
 URL_TYPE = r'craft\fields\Url'
+REDACTOR_TYPE = r'craft\redactor\Field'
 
 
 # ── YAML file discovery and field collection ──────────────────────────────────
@@ -515,6 +516,77 @@ def run_p17c(url_fields, templates_dir):
     warn('See craft-5-linkfield references/template-migration.md — URL field auto-promotion.')
 
     return url_fields
+
+
+# ── P1.14 – Redactor fields (CKEditor conversion candidates) ─────────────────
+
+def _collect_redactor_fields(config_dir):
+    """Collect all craft\\redactor\\Field fields from project config."""
+    redactor_fields = []
+    for filepath, data in iter_config_yamls(config_dir):
+        if (data.get('type', '') or '') == REDACTOR_TYPE:
+            redactor_fields.append({
+                'handle': data.get('handle', '') or '',
+                'name': data.get('name', '') or '',
+                'filepath': filepath,
+            })
+    return redactor_fields
+
+
+def _composer_has_redactor(project_root):
+    """Return True if craftcms/redactor is in composer.json require/require-dev."""
+    composer_json = project_root / 'composer.json'
+    if not composer_json.exists():
+        return False
+    try:
+        data = json.loads(composer_json.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    requires = {
+        **((data.get('require') or {})),
+        **((data.get('require-dev') or {})),
+    }
+    return 'craftcms/redactor' in requires
+
+
+def run_p114(redactor_fields, project_root):
+    section('P1.14 REDACTOR FIELDS — CKEditor CONVERSION CANDIDATES')
+    has_pkg = _composer_has_redactor(project_root)
+    if not redactor_fields and not has_pkg:
+        info('No craftcms/redactor package or Redactor fields detected — skipping.')
+        return []
+
+    if has_pkg:
+        info('composer.json requires craftcms/redactor (abandoned — superseded by craftcms/ckeditor).')
+    if not redactor_fields:
+        info(r'No craft\redactor\Field fields found in project config.')
+        info('You may still need to remove the abandoned package after upgrade.')
+        return []
+
+    print()
+    info(f'Found {len(redactor_fields)} Redactor field(s):')
+    for f in redactor_fields:
+        print()
+        found(f"handle: '{f['handle']}'  [name: {f['name']!r}]")
+        info(f"  file: {f['filepath']}")
+
+    print()
+    warn('craftcms/redactor is abandoned. Replacement: craftcms/ckeditor, which')
+    warn('supports BOTH Craft 4 and Craft 5 and ships a conversion command:')
+    warn('    php craft ckeditor/convert/redactor')
+    warn('')
+    warn('RECOMMENDED: do the Redactor→CKEditor swap on Craft 4 BEFORE the Craft 5')
+    warn('upgrade, so the two migrations are isolated and easier to debug:')
+    warn('  1. composer require craftcms/ckeditor  (Craft 4 — installs the 3.x line)')
+    warn('  2. php craft ckeditor/convert/redactor')
+    warn('  3. Visual-diff a sample of converted entries.')
+    warn('  4. composer remove craftcms/redactor')
+    warn('  5. Commit, then proceed with the Craft 5 upgrade as normal.')
+    warn('')
+    warn('Fallback: defer the swap to post-upgrade (U3.3 or L4.4). Works, but')
+    warn('mixes two migrations and is harder to bisect if something looks off.')
+
+    return redactor_fields
 
 
 # ── P1.8 – Deprecated API calls and .with() ───────────────────────────────────
@@ -960,9 +1032,10 @@ def main():
     if config_dir.is_dir():
         lf_records, st_sub_handles = collect_all_fields(config_dir)
         url_fields = _collect_url_fields(config_dir)
+        redactor_fields = _collect_redactor_fields(config_dir)
     else:
-        lf_records, st_sub_handles, url_fields = [], [], []
-        print(f'\n[WARN] {config_dir} not found — P1.7/P1.7a/P1.7b/P1.7c sections skipped.')
+        lf_records, st_sub_handles, url_fields, redactor_fields = [], [], [], []
+        print(f'\n[WARN] {config_dir} not found — P1.7/P1.7a/P1.7b/P1.7c/P1.14 sections skipped.')
 
     # ── Run all sections ──────────────────────────────────────────────────────
     run_p17(lf_records)
@@ -974,6 +1047,8 @@ def main():
     run_p1_bootstrap(project_root)
     plugins_to_disable = run_p112(project_root)
     has_post_update_hook = run_p113(project_root)
+    has_redactor_pkg = _composer_has_redactor(project_root)
+    redactor_fields = run_p114(redactor_fields, project_root) or redactor_fields
 
     # ── State file summary ────────────────────────────────────────────────────
     print(f'\n{SEP}\n  STATE FILE SUMMARY — copy into .craft5-upgrade.md (Block P3)\n{SEP}')
@@ -1045,6 +1120,19 @@ def main():
 
     print()
     print(f'COMPOSER_POST_UPDATE_HOOK: {"yes" if has_post_update_hook else "no"}')
+
+    print()
+    print('## Redactor → CKEditor conversion')
+    print('<!-- craftcms/redactor is abandoned. Convert to craftcms/ckeditor post-upgrade. -->')
+    print(f'REDACTOR_PACKAGE_PRESENT: {"yes" if has_redactor_pkg else "no"}')
+    print('REDACTOR_FIELDS:')
+    if redactor_fields:
+        for f in redactor_fields:
+            print(f"  - handle: {f['handle']}")
+            print(f"    name: {f['name']!r}")
+            print(f"    file: {f['filepath']}")
+    else:
+        print('  (none)')
     print()
     print(SEP)
     print('  Audit complete.')
