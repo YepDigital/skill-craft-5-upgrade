@@ -181,15 +181,29 @@ notes (if generated in U3.3 / L5.2).
 
 **Recommended order — convert on Craft 4 before the Craft 5 upgrade:**
 1. `composer require craftcms/ckeditor` (Craft 4 installs the 3.x line)
-2. `php craft ckeditor/convert/redactor`
-3. Visual-diff a sample of converted entries.
-4. `composer remove craftcms/redactor`
-5. Commit, then proceed with the Craft 5 upgrade as normal.
+2. `php craft plugin/install ckeditor` (composer alone does not enable it — the convert command will not be available otherwise)
+3. `php craft ckeditor/convert/redactor`
+4. Visual-diff a sample of converted entries.
+5. `composer remove craftcms/redactor`
+6. Commit, then proceed with the Craft 5 upgrade as normal.
 
 Isolating the Redactor→CKEditor migration from the Craft 4→5 upgrade makes
 either failure easier to bisect. The existing post-upgrade conversion steps
 (upgrade U3.3 / linkfield L4.4) remain as a fallback if the user prefers to
 defer the swap; either path is valid.
+
+**MUST surface to the user verbatim — but only when CKEditor is not already
+in use.** When `REDACTOR_FIELDS` is non-empty AND `CKEDITOR_PACKAGE_PRESENT=no`,
+reproduce the full six-step recommended order above (or the equivalent
+`audit.py` P1.14 warning block) in your Block P1 findings report. Do not
+collapse it to "Redactor detected" — the user needs the explicit steps and
+the install-plugin caveat, otherwise the convert command will not exist when
+they try to run it.
+
+When `CKEDITOR_PACKAGE_PRESENT=yes`, skip the require/install/recommended-order
+block — those steps are already done. Just report the remaining Redactor
+fields and the short follow-up: `php craft ckeditor/convert/redactor`, then
+`composer remove craftcms/redactor` once no Redactor fields remain.
 
 ### P1.9 Template extension collisions
 Search `templates/` for directories containing both a `.twig` and `.html` file

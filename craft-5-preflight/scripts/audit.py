@@ -533,8 +533,8 @@ def _collect_redactor_fields(config_dir):
     return redactor_fields
 
 
-def _composer_has_redactor(project_root):
-    """Return True if craftcms/redactor is in composer.json require/require-dev."""
+def _composer_has(project_root, package):
+    """Return True if `package` is in composer.json require/require-dev."""
     composer_json = project_root / 'composer.json'
     if not composer_json.exists():
         return False
@@ -546,12 +546,21 @@ def _composer_has_redactor(project_root):
         **((data.get('require') or {})),
         **((data.get('require-dev') or {})),
     }
-    return 'craftcms/redactor' in requires
+    return package in requires
+
+
+def _composer_has_redactor(project_root):
+    return _composer_has(project_root, 'craftcms/redactor')
+
+
+def _composer_has_ckeditor(project_root):
+    return _composer_has(project_root, 'craftcms/ckeditor')
 
 
 def run_p114(redactor_fields, project_root):
     section('P1.14 REDACTOR FIELDS — CKEditor CONVERSION CANDIDATES')
     has_pkg = _composer_has_redactor(project_root)
+    has_ckeditor = _composer_has_ckeditor(project_root)
     if not redactor_fields and not has_pkg:
         info('No craftcms/redactor package or Redactor fields detected — skipping.')
         return []
@@ -571,20 +580,29 @@ def run_p114(redactor_fields, project_root):
         info(f"  file: {f['filepath']}")
 
     print()
-    warn('craftcms/redactor is abandoned. Replacement: craftcms/ckeditor, which')
-    warn('supports BOTH Craft 4 and Craft 5 and ships a conversion command:')
-    warn('    php craft ckeditor/convert/redactor')
-    warn('')
-    warn('RECOMMENDED: do the Redactor→CKEditor swap on Craft 4 BEFORE the Craft 5')
-    warn('upgrade, so the two migrations are isolated and easier to debug:')
-    warn('  1. composer require craftcms/ckeditor  (Craft 4 — installs the 3.x line)')
-    warn('  2. php craft ckeditor/convert/redactor')
-    warn('  3. Visual-diff a sample of converted entries.')
-    warn('  4. composer remove craftcms/redactor')
-    warn('  5. Commit, then proceed with the Craft 5 upgrade as normal.')
-    warn('')
-    warn('Fallback: defer the swap to post-upgrade (U3.3 or L4.4). Works, but')
-    warn('mixes two migrations and is harder to bisect if something looks off.')
+    if has_ckeditor:
+        # CKEditor already in use — skip the install/require steps and just
+        # surface the convert command for the remaining Redactor fields.
+        info('craftcms/ckeditor is already in composer.json — install/require steps not needed.')
+        warn('Convert the remaining Redactor fields with:')
+        warn('    php craft ckeditor/convert/redactor')
+        warn('Then `composer remove craftcms/redactor` once no Redactor fields remain.')
+    else:
+        warn('craftcms/redactor is abandoned. Replacement: craftcms/ckeditor, which')
+        warn('supports BOTH Craft 4 and Craft 5 and ships a conversion command:')
+        warn('    php craft ckeditor/convert/redactor')
+        warn('')
+        warn('RECOMMENDED: do the Redactor→CKEditor swap on Craft 4 BEFORE the Craft 5')
+        warn('upgrade, so the two migrations are isolated and easier to debug:')
+        warn('  1. composer require craftcms/ckeditor  (Craft 4 — installs the 3.x line)')
+        warn('  2. php craft plugin/install ckeditor   (composer alone does not enable it)')
+        warn('  3. php craft ckeditor/convert/redactor')
+        warn('  4. Visual-diff a sample of converted entries.')
+        warn('  5. composer remove craftcms/redactor')
+        warn('  6. Commit, then proceed with the Craft 5 upgrade as normal.')
+        warn('')
+        warn('Fallback: defer the swap to post-upgrade (U3.3 or L4.4). Works, but')
+        warn('mixes two migrations and is harder to bisect if something looks off.')
 
     return redactor_fields
 
@@ -1048,6 +1066,7 @@ def main():
     plugins_to_disable = run_p112(project_root)
     has_post_update_hook = run_p113(project_root)
     has_redactor_pkg = _composer_has_redactor(project_root)
+    has_ckeditor_pkg = _composer_has_ckeditor(project_root)
     redactor_fields = run_p114(redactor_fields, project_root) or redactor_fields
 
     # ── State file summary ────────────────────────────────────────────────────
@@ -1125,6 +1144,7 @@ def main():
     print('## Redactor → CKEditor conversion')
     print('<!-- craftcms/redactor is abandoned. Convert to craftcms/ckeditor post-upgrade. -->')
     print(f'REDACTOR_PACKAGE_PRESENT: {"yes" if has_redactor_pkg else "no"}')
+    print(f'CKEDITOR_PACKAGE_PRESENT: {"yes" if has_ckeditor_pkg else "no"}')
     print('REDACTOR_FIELDS:')
     if redactor_fields:
         for f in redactor_fields:

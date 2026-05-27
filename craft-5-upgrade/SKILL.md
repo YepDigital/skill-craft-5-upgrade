@@ -299,9 +299,12 @@ composer update --lock --no-interaction
 #### CKEditor Redactor conversion (if applicable)
 If the project uses Redactor fields:
 ```bash
+php craft plugin/install ckeditor
 php craft ckeditor/convert/redactor
 ```
-Skip if no Redactor fields exist.
+`plugin/install ckeditor` is required — composer alone does not enable the
+plugin, and the convert command will not exist without it. Skip both if no
+Redactor fields exist.
 
 #### Run fields/auto-merge
 `php craft fields/auto-merge` requires an interactive terminal and cannot be
