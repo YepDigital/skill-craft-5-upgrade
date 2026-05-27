@@ -1,19 +1,36 @@
-# Craft 5 Upgrade Skill Suite
+# Craft Upgrade Skill Suite (3 → 4 → 5)
 
-Four Claude Code skills that orchestrate upgrading a Craft CMS 4 project to
-Craft CMS 5, including migration of `sebastianlenz/linkfield` (Typed Link Field)
-to Craft 5's native Link field.
+Five Claude Code skills that orchestrate upgrading a Craft CMS project from
+Craft 3 all the way to Craft 5, including migration of
+`sebastianlenz/linkfield` (Typed Link Field) to Craft 5's native Link field.
+
+> **Note on the repo name:** renaming isn't necessary — running
+> `craft-4-upgrade` followed by the Craft 5 skills gives you a direct
+> 3 → 5 path from a single cloned repo.
 
 ## Skills
 
 | Skill | Directory | Purpose |
 |-------|-----------|---------|
+| `craft-4-upgrade` | `craft-4-upgrade/` | Full Craft 3 → 4 upgrade (audit, prep, destructive upgrade, remediation) |
 | `craft-5-preflight` | `craft-5-preflight/` | Audit + Craft-4 duplicate-handle remediation |
 | `craft-5-upgrade` | `craft-5-upgrade/` | Destructive upgrade (Composer, `php craft up`) |
 | `craft-5-linkfield` | `craft-5-linkfield/` | Linkfield data migration + template patching |
 | `craft-5-supertable` | `craft-5-supertable/` | Optional: Super Table → native Matrix |
 
 ## Run order
+
+### Craft 3 → 5 (full path)
+
+```
+craft-4-upgrade     → Craft 3 projects only (brings site to Craft 4)
+craft-5-preflight   → all projects (audit before the 4→5 upgrade)
+craft-5-upgrade     → all projects (after preflight-done)
+craft-5-linkfield   → projects with sebastianlenz/linkfield only (after upgrade-done)
+craft-5-supertable  → optional, any time after upgrade-done
+```
+
+### Craft 4 → 5 only
 
 ```
 craft-5-preflight   → all projects
@@ -29,6 +46,7 @@ nested skill directories automatically. The skills are registered as:
 
 | Skill ID | Directory |
 |----------|-----------|
+| `craft-5-upgrade:craft-4-upgrade` | `craft-4-upgrade/` |
 | `craft-5-upgrade:craft-5-preflight` | `craft-5-preflight/` |
 | `craft-5-upgrade:craft-5-upgrade` | `craft-5-upgrade/` |
 | `craft-5-upgrade:craft-5-linkfield` | `craft-5-linkfield/` |
@@ -36,14 +54,16 @@ nested skill directories automatically. The skills are registered as:
 
 No extra installation steps needed — cloning to `~/.claude/skills/craft-5-upgrade/`
 is sufficient. Skills trigger via their `description` frontmatter or explicit
-`/craft-5-preflight` etc. invocation.
+`/craft-4-upgrade`, `/craft-5-preflight` etc. invocation.
 
-## State file
+## State files
 
-`craft-5-preflight` writes `.craft5-upgrade.md` to the target project root.
-Subsequent skills read it and refuse to run if absent or out of phase.
-Add `.craft5-upgrade.md` to the target project's `.gitignore` (contains
-`MYSQL_CMD`, a local value).
+- `craft-4-upgrade` writes `.craft4-upgrade.md` to the target project root.
+- `craft-5-preflight` writes `.craft5-upgrade.md` to the target project root.
+
+Subsequent skills in each chain read the state file and refuse to run if absent
+or out of phase. Add both state files to the target project's `.gitignore`
+(they contain `MYSQL_CMD`, a local value).
 
 ## Key design decisions
 
