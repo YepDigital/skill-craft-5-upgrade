@@ -3,7 +3,7 @@
 Craft 5 preflight audit script — replaces audit.sh
 Run from the project root:
     python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py [project_root]
-Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.8, P1.8b, P1.10b, P1.12, P1.13
+Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.8, P1.8b, P1.10b, P1.12, P1.13
 """
 
 import argparse

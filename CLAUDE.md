@@ -49,10 +49,11 @@ Each skill:
   carried through the state file).
 
 ### craft-5-preflight
-- `scripts/audit.py` — read-only audit (P1.7, P1.7a, P1.7b, P1.8, P1.8b,
-  P1.10b, P1.12, P1.13): linkfield inventory, Super Table duplicate handles,
-  non-ST duplicate handles, deprecated API calls, handle reference files,
-  bootstrap customisations, afterSave* plugins, composer post-update-cmd.
+- `scripts/audit.py` — read-only audit (P1.7, P1.7a, P1.7b, P1.7c, P1.8,
+  P1.8b, P1.10b, P1.12, P1.13): linkfield inventory, Super Table duplicate
+  handles, non-ST duplicate handles, URL→Link auto-promotion candidates,
+  deprecated API calls, handle reference files, bootstrap customisations,
+  afterSave* plugins, composer post-update-cmd.
 - `references/handle-remediation.md` — detailed guide for Block P2
   (duplicate handle renaming on Craft 4, the primary root-cause fix).
 
