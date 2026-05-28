@@ -268,12 +268,16 @@ def _load_st_external_blocks(config_dir):
 def collect_all_fields(config_dir):
     """
     Walk all project config YAML files.
-    Returns (lf_records, st_sub_handles):
-      lf_records: every linkfield definition found (all contexts)
+    Returns (lf_records, st_sub_handles, st_field_count):
+      lf_records:     every linkfield definition found (all contexts)
       st_sub_handles: every ST sub-field handle (for P1.7a dup detection)
+      st_field_count: number of ST-typed field YAMLs found (distinct from
+                      whether sub-handles were collected — used to distinguish
+                      "ST not installed" from "ST installed, sub-field scan failed")
     """
     lf_records = []
     st_sub_handles = []
+    st_field_count = 0
     st_external = _load_st_external_blocks(config_dir)
 
     for filepath, data in iter_config_yamls(config_dir):
@@ -287,19 +291,18 @@ def collect_all_fields(config_dir):
                 field_type=field_type,
             ))
         elif field_type in (ST_TYPE, MT_TYPE):
-            # For Super Table fields, merge in any externally-stored block types.
-            # Newer ST releases store block types in superTableBlockTypes/<uid>.yaml
-            # rather than inline under blockTypes:, leaving the inline key empty.
-            if field_type == ST_TYPE and st_external:
-                field_uid = Path(filepath).stem
-                external_bts = st_external.get(field_uid)
-                if external_bts:
-                    inline_bts = data.get('blockTypes') or {}
-                    if not inline_bts:
-                        data = dict(data)
-                        data['blockTypes'] = external_bts
-                    else:
-                        merged = dict(inline_bts)
+            if field_type == ST_TYPE:
+                st_field_count += 1
+                # For Super Table fields, merge in any externally-stored block types.
+                # Newer ST releases store block types in superTableBlockTypes/<uid>.yaml
+                # keyed by the field's bare UUID, not the full filename stem.
+                # Field YAMLs are named {handle}--{uuid}.yaml, so we must strip the
+                # handle prefix before looking up in the external block types dict.
+                if st_external:
+                    field_uid = Path(filepath).stem.split('--')[-1]
+                    external_bts = st_external.get(field_uid)
+                    if external_bts:
+                        merged = dict(data.get('blockTypes') or {})
                         merged.update(external_bts)
                         data = dict(data)
                         data['blockTypes'] = merged
@@ -309,7 +312,7 @@ def collect_all_fields(config_dir):
             lf_records.extend(sub_lf)
             st_sub_handles.extend(sub_st)
 
-    return lf_records, st_sub_handles
+    return lf_records, st_sub_handles, st_field_count
 
 
 # ── P1.7 – Linkfield inventory ────────────────────────────────────────────────
@@ -350,10 +353,14 @@ def run_p17(lf_records):
 
 # ── P1.7a – Super Table duplicate handles ─────────────────────────────────────
 
-def run_p17a(st_sub_handles):
+def run_p17a(st_sub_handles, st_field_count):
     section('P1.7a SUPER TABLE DUPLICATE FIELD HANDLES')
+    if not st_field_count:
+        info('No Super Table fields found in project config — skipping')
+        return
     if not st_sub_handles:
-        info('verbb/super-table not found in project config — skipping')
+        warn('Super Table fields found but no sub-fields collected.')
+        warn('Check config/project/superTableBlockTypes/ — YAMLs may have an unexpected structure.')
         return
 
     info('Scanning Super Table block type field handles...')
@@ -1048,16 +1055,17 @@ def main():
 
     # Collect field data from project config
     if config_dir.is_dir():
-        lf_records, st_sub_handles = collect_all_fields(config_dir)
+        lf_records, st_sub_handles, st_field_count = collect_all_fields(config_dir)
         url_fields = _collect_url_fields(config_dir)
         redactor_fields = _collect_redactor_fields(config_dir)
     else:
-        lf_records, st_sub_handles, url_fields, redactor_fields = [], [], [], []
+        lf_records, st_sub_handles, st_field_count = [], [], 0
+        url_fields, redactor_fields = [], []
         print(f'\n[WARN] {config_dir} not found — P1.7/P1.7a/P1.7b/P1.7c/P1.14 sections skipped.')
 
     # ── Run all sections ──────────────────────────────────────────────────────
     run_p17(lf_records)
-    run_p17a(st_sub_handles)
+    run_p17a(st_sub_handles, st_field_count)
     run_p17b(lf_records)
     url_fields = run_p17c(url_fields, templates_dir) or url_fields
     deprecated_files, with_files = run_p18(templates_dir)

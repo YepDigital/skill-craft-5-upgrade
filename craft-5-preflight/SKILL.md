@@ -115,11 +115,18 @@ Read the output and record all findings. The script prints a state file summary 
 List every duplicate Super Table sub-field handle found. These are remediated
 in Block P2.
 
-The audit now reads both the inline `blockTypes:` key on each ST field YAML
+The audit reads both the inline `blockTypes:` key on each ST field YAML
 **and** the separate `config/project/superTableBlockTypes/` directory used by
-newer Super Table releases. A "no duplicates found" result is therefore
-authoritative — if the directory does not exist at all, the audit notes that
-and ST sub-field detection is fully skipped.
+newer Super Table releases. The two guard states are distinct:
+
+- **"No Super Table fields found"** — no YAML in `config/project/fields/` has
+  `type: verbb\supertable\fields\SuperTableField`. ST is not installed or not
+  configured. Fully authoritative skip.
+- **"Super Table fields found but no sub-fields collected"** — ST fields exist
+  but block-type scanning yielded nothing. This is an unexpected structure
+  warning, not a clean skip. Investigate `config/project/superTableBlockTypes/`.
+
+A "no duplicates found" result after the scan runs is authoritative.
 
 **Data loss risk from duplicate handles + linkfield data:**
 `getAllFields()` in the `craft-5-linkfield` migrator surfaces only one field
