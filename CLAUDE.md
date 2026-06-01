@@ -87,6 +87,36 @@ Each skill:
 Fails with "No Typed Link Fields found" when the 3.0.0-beta cannot instantiate
 Craft 4-era field settings — the common real-site failure mode.
 
+## Native-tooling decisions
+
+These decisions were researched and recorded to avoid rediscovery. See
+`native-craft-5-opps.md` for full spike notes and rationale.
+
+- **`fields/merge` / `fields/auto-merge` — not adopted as default.** Stability
+  over optimization: duplicate fields after upgrade are an acceptable outcome.
+  `auto-merge` only reduces field count and carries known relation-merge bugs for
+  max-relations=1 fields (#15869, #16198, #16444). Steps remain in upgrade U3.3
+  and linkfield L4.5 as **optional and discouraged** opt-in only.
+
+- **Content migrations (`php craft migrate/create`) — not adopted** for the
+  linkfield data migration. The explicit dry-run → inspect → `echo "yes" |` → live
+  gating on a destructive DB op is deliberately safer than "run once, tracked."
+
+- **`run-direct` stays custom.** The linkfield 3.0.0-beta cannot instantiate
+  Craft 4-era field settings, so `MigrateLinkfieldController run-direct` bypasses
+  the plugin entirely and reads `lenz_linkfield` / `craft_fields` directly. No
+  native command does this — it is the irreducible core of the migration.
+
+- **`super-table/migrate` — opportunity documented, not validated.** Verbb ships
+  `php craft super-table/migrate` and Craft 5 auto-converts Matrix blocks to entry
+  types during `php craft up`. The supertable skill notes this as the preferred-first
+  path to evaluate (S3 in `supertable-migration.md`), with the existing custom console
+  command as the fallback pending real-data validation.
+
+- **`stimmt/craft-mcp` — optional post-upgrade verification aid.** Craft 5-only,
+  dev-only, install transiently, remove after sign-off. Not a skill dependency.
+  See `craft-5-linkfield/references/post-upgrade-verification.md`.
+
 ## Editing rules
 
 - The global rules in each SKILL.md are instructions to the *runtime* — mirror

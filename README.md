@@ -63,3 +63,16 @@ Add `.craft5-upgrade.md` to the target project's `.gitignore` (contains
   are written to disk, not carried only in conversation memory.
 
 - **MySQL only** — Postgres is not supported.
+
+- **`fields/auto-merge` not adopted as default** — duplicate fields after upgrade
+  are acceptable (optimization, not stability). Steps in upgrade U3.3 and linkfield
+  L4.5 are opt-in and discouraged; known relation-merge bugs make it risky for
+  max-relations=1 fields.
+
+- **Content migrations not adopted** — the explicit dry-run→live gating in
+  `run-direct` is deliberately safer for a destructive DB op than "run once,
+  tracked."
+
+- **`super-table/migrate` — preferred-first path to evaluate** before the
+  hand-written console command in `craft-5-supertable` Block S3. Not yet validated
+  against a real dataset; custom command remains the documented fallback.
