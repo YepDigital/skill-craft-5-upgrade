@@ -53,7 +53,8 @@ Each skill:
   P1.8b, P1.10b, P1.12, P1.13): linkfield inventory, Super Table duplicate
   handles, non-ST duplicate handles, URL→Link auto-promotion candidates,
   deprecated API calls, handle reference files, bootstrap customisations,
-  afterSave* plugins, composer post-update-cmd.
+  afterSave* plugins (classified into field/content = keep enabled,
+  deploy/notification = disable, unconfirmed = review), composer post-update-cmd.
 - `references/handle-remediation.md` — detailed guide for Block P2
   (duplicate handle renaming on Craft 4, the primary root-cause fix).
 
@@ -116,6 +117,18 @@ These decisions were researched and recorded to avoid rediscovery. See
 - **`stimmt/craft-mcp` — optional post-upgrade verification aid.** Craft 5-only,
   dev-only, install transiently, remove after sign-off. Not a skill dependency.
   See `craft-5-linkfield/references/post-upgrade-verification.md`.
+
+- **Never disable field/content plugins for the upgrade (Hyper postmortem).**
+  Field plugins (Hyper, Super Table, CKEditor, Redactor, Formie, linkfield, and
+  anything registering a field/block/element type) ship content migrations that
+  run during `php craft up` against the still-present Craft 4 content tables.
+  Disabling one serializes its fields as `craft\fields\MissingField` into project
+  config and skips its migration — irreversible once Craft drops the source tables
+  (`matrixcontent_*`, `stc_*`). The `afterSave*` heuristic alone cannot tell a
+  field plugin from a deploy/notification plugin, so P1.12 now classifies each into
+  `FIELD_PLUGINS_KEEP_ENABLED` (never disable), `PLUGINS_TO_DISABLE_FOR_UPGRADE`
+  (deploy/notification only), and `PLUGINS_FOR_MANUAL_REVIEW` (default: leave
+  enabled). U2.6 adds a field/content render gate before any commit.
 
 ## Editing rules
 

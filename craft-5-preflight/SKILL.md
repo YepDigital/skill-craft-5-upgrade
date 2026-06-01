@@ -105,7 +105,7 @@ This covers all areas in one pass:
 - **P1.8** — Deprecated API calls and `.with([` calls in templates
 - **P1.8b** — All template files referencing any linkfield handle (for the L3 patcher file list)
 - **P1.10b** — Non-standard customisations in `bootstrap.php` / `web/index.php`
-- **P1.12** — Vendor plugins with `afterSave*` event hooks
+- **P1.12** — Vendor plugins with `afterSave*` event hooks, classified into field/content plugins (keep enabled), deploy/notification plugins (disable), and unconfirmed (review)
 - **P1.13** — `composer.json` `post-update-cmd` running `@craft-update`
 - **P1.14** — `craftcms/redactor` package + `craft\redactor\Field` field inventory (CKEditor conversion candidates)
 
@@ -170,15 +170,32 @@ linkfield handle. Use this list (not just `DEPRECATED_API_FILES`) as the
 `--files` argument to `patch-templates.py` in `craft-5-linkfield` Block L3.
 
 **After running — P1.12 note:**
-`PLUGINS_TO_DISABLE_FOR_UPGRADE` lists Craft plugin handles for any plugin
-(or any plugin's bundled vendor library) that registers `afterSave*` event
-hooks. The audit resolves vendor libraries to their host plugin's handle by
-inspecting `composer.json` files under `vendor/`, so values can be passed
-directly to `php craft plugin/disable`. These must be disabled before U1.2 —
-`fix-field-layout-uids` triggers many element saves, and deploy-side hooks
-with environment-specific paths will fail. Each handle is re-enabled locally
-at the end of the upgrade (U3.3 / L4.6) and listed in the production deploy
-notes (if generated in U3.3 / L5.2).
+The audit classifies every plugin that registers an `afterSave*` event hook into
+three buckets. **The `afterSave*` heuristic alone cannot tell field plugins from
+deploy plugins**, so the audit also scans each package for field-type / element-type
+registration (keep enabled) and for env-specific deploy signals (safe to disable):
+
+- **`PLUGINS_TO_DISABLE_FOR_UPGRADE`** — deploy/notification plugins only (cache
+  busters, webhook/Slack notifiers, external-service reindexers). Their `afterSave*`
+  hooks use env-specific paths or external HTTP and genuinely fail in dev during
+  `fix-field-layout-uids`. Disable these before U1.2; re-enable locally at the end
+  of the upgrade (U3.3 / L4.6) and in production deploy notes.
+- **`FIELD_PLUGINS_KEEP_ENABLED`** — field/content plugins (Hyper, Super Table,
+  CKEditor, Redactor, Formie, linkfield, anything that registers a field/block/
+  element type). **NEVER disable these for the upgrade.** They ship content
+  migrations that run during `php craft up` against the still-present Craft 4
+  content tables. Disabling one serializes its fields as `craft\fields\MissingField`
+  into project config and skips its migration — **irreversible** once Craft drops
+  the Craft 4 source tables (`matrixcontent_*`, `stc_*`). Leave them enabled
+  throughout `fix-field-layout-uids`, `composer update`, and `php craft up`.
+- **`PLUGINS_FOR_MANUAL_REVIEW`** — `afterSave*` plugins the audit could not confirm
+  as pure deploy/notification hooks. **Default to leaving these enabled.** Inspect
+  each handler: only move a plugin into `PLUGINS_TO_DISABLE_FOR_UPGRADE` if its
+  `afterSave*` references env-specific filesystem paths, external HTTP endpoints, or
+  deploy tooling. If it touches its own field/content data, leave it enabled.
+
+The audit resolves vendor libraries to their host plugin's handle via `composer.json`
+under `vendor/`, so handles can be passed directly to `php craft plugin/disable`.
 
 **After running — P1.14 note:**
 `REDACTOR_PACKAGE_PRESENT` and `REDACTOR_FIELDS` flag use of the abandoned
@@ -390,12 +407,29 @@ BOOTSTRAP_CUSTOMISATIONS:
   - <description or "(none)">
 
 ## Plugins to disable for upgrade
-<!-- From P1.12: Craft plugin handles for plugins (and plugins whose bundled -->
-<!-- vendor library) register afterSave* hooks that will fail in dev during U1.2. -->
-<!-- The audit script resolves vendor libraries to their host plugin handle -->
+<!-- From P1.12: DEPLOY/NOTIFICATION plugins only — afterSave* hooks with -->
+<!-- env-specific paths / external HTTP that fail in dev during U1.2. -->
+<!-- The audit resolves vendor libraries to their host plugin handle -->
 <!-- automatically. Disable before U1.2; re-enable in DEPLOY.md for production. -->
+<!-- NEVER list field/content plugins here (see FIELD_PLUGINS_KEEP_ENABLED). -->
 PLUGINS_TO_DISABLE_FOR_UPGRADE:
   - <plugin-handle>  # afterSave* registered in <package-name>
+
+## Field/content plugins to KEEP ENABLED
+<!-- From P1.12: field/content plugins (Hyper, Super Table, CKEditor, Redactor, -->
+<!-- Formie, linkfield, etc.) that register afterSave* hooks. DO NOT disable -->
+<!-- these for the upgrade — they run content migrations during `php craft up` -->
+<!-- that require the plugin enabled and the Craft 4 source tables intact. -->
+<!-- Disabling one is irreversible once those tables drop. -->
+FIELD_PLUGINS_KEEP_ENABLED:
+  - <plugin-handle>  # field/content plugin — <package-name>
+
+## Plugins for manual review
+<!-- From P1.12: afterSave* plugins not confirmed as deploy/notification hooks. -->
+<!-- Default to LEAVING ENABLED. Only move to PLUGINS_TO_DISABLE_FOR_UPGRADE if -->
+<!-- the handler uses env-specific paths, external HTTP, or deploy tooling. -->
+PLUGINS_FOR_MANUAL_REVIEW:
+  - <plugin-handle>  # review afterSave* handler — <package-name>
 
 ## Composer hook
 COMPOSER_POST_UPDATE_HOOK: yes|no

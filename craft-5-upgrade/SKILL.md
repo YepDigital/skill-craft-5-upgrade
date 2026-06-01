@@ -50,6 +50,9 @@ Read `.craft5-upgrade.md`. Record:
 - `DB_NAME`
 - `DB_CHARSET_EXISTING`
 - `PLUGINS_TO_DISABLE_FOR_UPGRADE` (may be empty)
+- `FIELD_PLUGINS_KEEP_ENABLED` (may be empty — field/content plugins that must
+  stay enabled throughout the upgrade)
+- `PLUGINS_FOR_MANUAL_REVIEW` (may be empty)
 - `COMPOSER_POST_UPDATE_HOOK` (yes/no)
 - Plugin target versions from PLUGIN_TARGETS table
 - Any blockers (must be none)
@@ -83,10 +86,24 @@ php craft utils/fix-field-layout-uids
 ### U1.2.5 Disable deploy-side plugins
 **Skip this step if `PLUGINS_TO_DISABLE_FOR_UPGRADE` in the state file is empty.**
 
+> **CRITICAL — never disable field/content plugins.** Only disable plugins listed
+> in `PLUGINS_TO_DISABLE_FOR_UPGRADE` (deploy/notification hooks). **Do NOT disable
+> any plugin in `FIELD_PLUGINS_KEEP_ENABLED`** (Hyper, Super Table, CKEditor,
+> Redactor, Formie, linkfield, or anything that provides a field/block/element
+> type). Those plugins run content migrations during `php craft up` against the
+> still-present Craft 4 content tables. Disabling one serializes its fields as
+> `craft\fields\MissingField` into project config **and** skips its migration —
+> **irreversible** once Craft drops the Craft 4 source tables (`matrixcontent_*`,
+> `stc_*`). The damage cannot be undone by re-enabling the plugin afterward; the
+> only recovery is a full DB + code rollback and a clean re-run. Leave every field
+> plugin enabled throughout `fix-field-layout-uids`, `composer update`, and
+> `php craft up`.
+
 `fix-field-layout-uids` (and `php craft up` in U2) trigger many element saves.
-Plugins that register `afterSaveElement` with environment-specific paths (cache
-busters, deploy notifiers, search reindex hooks, Slack webhooks) will throw
-`InvalidArgumentException` on dev and abort the command mid-run.
+Deploy/notification plugins that register `afterSaveElement` with environment-specific
+paths (cache busters, deploy notifiers, search reindex hooks, Slack webhooks) will
+throw `InvalidArgumentException` on dev and abort the command mid-run. **These** are
+safe and correct to disable.
 
 The preflight audit resolves vendor libraries to their host plugin and records
 plugin handles (not package names) directly in `PLUGINS_TO_DISABLE_FOR_UPGRADE`.
@@ -98,6 +115,11 @@ php craft plugin/disable <handle>
 If an entry shows `# no plugin handle resolved`, the preflight could not map
 the vendor library to a host plugin — derive the handle from
 `php craft plugin/list` and disable manually.
+
+If `PLUGINS_FOR_MANUAL_REVIEW` is non-empty, do **not** disable those plugins by
+default. Inspect each `afterSave*` handler and disable only the ones that clearly
+reference env-specific filesystem paths, external HTTP endpoints, or deploy tooling.
+When in doubt, leave the plugin enabled.
 
 Record the handles disabled here; they must be re-enabled on production
 (added to DEPLOY.md in U3/L5).
@@ -249,10 +271,40 @@ composer show craftcms/cms | grep -E "^versions"
 ```
 Confirm a 5.x version is shown. Stop if not.
 
+### U2.6 Field/content render gate (before committing)
+`php craft up` runs each field plugin's content migration in place against the
+Craft 4 source tables — and then Craft drops those tables. If a field plugin's
+content did not migrate correctly, the only fix is a full rollback (restore the
+DB + code to the pre-upgrade snapshot taken in U1.1). **Catch it now, before
+anything is committed.**
+
+For every plugin in `FIELD_PLUGINS_KEEP_ENABLED` (and any field plugin you know
+the site uses — Hyper, Super Table, CKEditor, Redactor, Formie), load a front-end
+page or CP entry that renders one of its fields and confirm the content is intact:
+
+- **Hyper / linkfield:** a link renders with its real link text **and** a non-empty
+  `href`, including anchor-only links (e.g. `href="#apply"`). An empty `<a href="">`
+  or missing text means the migration was skipped (plugin was disabled, or source
+  tables were already gone) — **stop and roll back to the U1.1 snapshot**.
+- **Super Table / Matrix:** blocks render with their field values populated.
+- **CKEditor / Redactor:** rich-text body renders with formatting intact.
+
+Also check field definitions did not corrupt:
+```bash
+php craft project-config/diff
+```
+Confirm no field that should belong to a field plugin is serialized as
+`craft\fields\MissingField`. If any is, the plugin was disabled during the
+upgrade — **stop and roll back to the U1.1 snapshot**; do not "fix" it by re-enabling, as the
+content migration has already been skipped against now-dropped source tables.
+
+If anything renders empty or as `MissingField`, do not commit. Report and roll back.
+
 ---
 
-**STOP. Report Craft version, all command outputs, current state of `.env`
-and `composer.json`. Wait for confirmation before Block U3.**
+**STOP. Report Craft version, all command outputs, the U2.6 render-gate results,
+and current state of `.env` and `composer.json`. Wait for confirmation before
+Block U3.**
 
 ---
 

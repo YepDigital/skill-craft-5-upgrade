@@ -839,6 +839,65 @@ _AFTERSAVE_PATTERNS = [
     'afterSaveElement',
 ]
 
+# Field / content plugins must NOT be disabled for the upgrade. Their afterSave*
+# hooks maintain their own field data, and they ship content migrations that run
+# during `php craft up` against the still-present Craft 4 content tables.
+# Disabling them serializes their fields as MissingField and skips the migration
+# irreversibly (the Craft 4 source tables are dropped). See the Hyper postmortem.
+#
+# Detected two ways: (a) a hard-coded known list of handles/package fragments,
+# and (b) source signals showing the package registers a field/element/block type.
+_FIELD_PLUGIN_HANDLES = frozenset({
+    'hyper', 'super-table', 'supertable', 'ckeditor', 'redactor', 'formie',
+    'linkfield', 'typedlinkfield', 'typed-link-field',
+})
+_FIELD_PLUGIN_PKG_FRAGMENTS = (
+    'verbb/', 'sebastianlenz/linkfield', 'craftcms/ckeditor', 'craftcms/redactor',
+)
+_FIELD_SIGNAL_PATTERNS = (
+    'EVENT_REGISTER_FIELD_TYPES',
+    'registerFieldTypes',
+    'EVENT_REGISTER_ELEMENT_TYPES',
+    'extends Field',
+    'extends \\craft\\base\\Field',
+    'craft\\base\\FieldInterface',
+)
+# Signals that an afterSave* hook is a deploy/notification side effect (env-specific
+# paths, external HTTP, cache busting, deploy tooling) — these ARE safe to disable.
+_DEPLOY_SIGNAL_PATTERNS = (
+    'GuzzleHttp',
+    'file_put_contents',
+    'file_get_contents',
+    'curl_',
+    'webhook',
+    'Webhook',
+    'Slack',
+    '->purge',
+    'invalidateCaches',
+    'getResponse()->redirect',
+    'shell_exec',
+    'proc_open',
+)
+
+
+def _classify_pkg(pkg_key, handle, signals):
+    """Return 'field', 'deploy', or 'unknown' for an afterSave* package.
+
+    'field'   → field/content plugin; never disable (would skip its migration).
+    'deploy'  → env-specific deploy/notification hook; safe to disable for upgrade.
+    'unknown' → can't confirm; default to leaving enabled and flag for review.
+    """
+    h = (handle or '').lower()
+    if h in _FIELD_PLUGIN_HANDLES:
+        return 'field'
+    if any(frag in pkg_key for frag in _FIELD_PLUGIN_PKG_FRAGMENTS):
+        return 'field'
+    if signals.get('field'):
+        return 'field'
+    if signals.get('deploy'):
+        return 'deploy'
+    return 'unknown'
+
 
 def _build_composer_map(vendor_dir):
     """Build {package_name → composer.json data} for every vendor package."""
@@ -941,6 +1000,12 @@ def run_p112(project_root):
             src_path = pkg_path / 'src'
             search_root = str(src_path) if src_path.is_dir() else str(pkg_path)
 
+            # Accumulate signals across every PHP file in the package. Field-type
+            # registration usually lives in a different file (Plugin.php, a Field
+            # class) than the afterSave* hook, so signals are scanned for the whole
+            # package regardless of walk order. Packages with no afterSave* hook are
+            # dropped after the walk.
+            entry = {'patterns': [], 'field': False, 'deploy': False}
             for dirpath, dirnames, filenames in os.walk(search_root):
                 dirnames[:] = [d for d in dirnames if d not in ('vendor', 'node_modules')]
                 for fname in filenames:
@@ -949,51 +1014,91 @@ def run_p112(project_root):
                     fpath = os.path.join(dirpath, fname)
                     try:
                         content = open(fpath, encoding='utf-8', errors='replace').read()
-                        for pat in _AFTERSAVE_PATTERNS:
-                            if pat in content:
-                                if pkg_key not in results:
-                                    results[pkg_key] = []
-                                if pat not in results[pkg_key]:
-                                    results[pkg_key].append(pat)
                     except (OSError, IOError):
-                        pass
+                        continue
+                    for pat in _AFTERSAVE_PATTERNS:
+                        if pat in content and pat not in entry['patterns']:
+                            entry['patterns'].append(pat)
+                    if any(s in content for s in _FIELD_SIGNAL_PATTERNS):
+                        entry['field'] = True
+                    if any(s in content for s in _DEPLOY_SIGNAL_PATTERNS):
+                        entry['deploy'] = True
+            if entry['patterns']:
+                results[pkg_key] = entry
 
     print()
     if not results:
         info('No plugins with afterSave* event hooks detected.')
         info('(If a deploy-side plugin is not listed, disable it manually before U1.2.)')
-        return []
+        return {'disable': [], 'field': [], 'review': []}
 
     composer_map = _build_composer_map(vendor_dir)
-    resolved = []  # list of dicts: pkg, host_pkg, handle, patterns
-    for pkg, patterns in sorted(results.items()):
+    by_category = {'field': [], 'deploy': [], 'unknown': []}
+    for pkg, signals in sorted(results.items()):
         host_pkg, handle = _resolve_plugin_handle(pkg, composer_map)
-        resolved.append({
+        category = _classify_pkg(pkg, handle, signals)
+        by_category[category].append({
             'pkg': pkg,
             'host_pkg': host_pkg,
             'handle': handle,
-            'patterns': patterns,
+            'patterns': signals['patterns'],
         })
 
-    warn('These plugins should be disabled before U1.2 (fix-field-layout-uids triggers')
-    warn('many element saves; deploy-side hooks with env-specific paths will fail).')
-    warn('Add them to PLUGINS_TO_DISABLE_FOR_UPGRADE in the state file.')
-    warn('Re-enable on production after deployment (add to DEPLOY.md).')
-    print()
-    for entry in resolved:
-        pkg, host_pkg, handle, patterns = (
-            entry['pkg'], entry['host_pkg'], entry['handle'], entry['patterns']
-        )
+    def _label(entry):
+        pkg, host_pkg, handle = entry['pkg'], entry['host_pkg'], entry['handle']
         if host_pkg and host_pkg != pkg:
-            found(f'{pkg}  (host plugin: {host_pkg}, handle: {handle or "?"})')
-        elif handle:
-            found(f'{pkg}  (handle: {handle})')
-        else:
-            found(f'{pkg}  (no Craft plugin handle resolved — disable manually)')
-        for pat in patterns:
-            info(f'    ↳ {pat}')
+            return f'{pkg}  (host plugin: {host_pkg}, handle: {handle or "?"})'
+        if handle:
+            return f'{pkg}  (handle: {handle})'
+        return f'{pkg}  (no Craft plugin handle resolved)'
 
-    return resolved
+    # Field/content plugins — NEVER disable. Disabling skips their content
+    # migration during `php craft up`, which is irreversible (source tables drop).
+    if by_category['field']:
+        warn('FIELD/CONTENT PLUGINS — DO NOT DISABLE for the upgrade.')
+        warn('These run content migrations during `php craft up` that require the')
+        warn('plugin enabled and the Craft 4 source tables intact. Disabling them')
+        warn('serializes their fields as MissingField and skips the migration')
+        warn('irreversibly. Leave them enabled throughout fix-field-layout-uids,')
+        warn('composer update, and php craft up. (See the Hyper postmortem.)')
+        print()
+        for entry in by_category['field']:
+            found(f'[KEEP ENABLED] {_label(entry)}')
+            for pat in entry['patterns']:
+                info(f'    ↳ {pat}')
+        print()
+
+    # Deploy/notification plugins — safe and correct to disable.
+    if by_category['deploy']:
+        warn('Deploy/notification plugins to disable before U1.2 (env-specific paths,')
+        warn('external HTTP, or cache busting in their afterSave* hooks will fail in dev).')
+        warn('Add them to PLUGINS_TO_DISABLE_FOR_UPGRADE. Re-enable on production (DEPLOY.md).')
+        print()
+        for entry in by_category['deploy']:
+            found(f'[DISABLE] {_label(entry)}')
+            for pat in entry['patterns']:
+                info(f'    ↳ {pat}')
+        print()
+
+    # Unknown — can't confirm. Default to LEAVING ENABLED; flag for manual review.
+    if by_category['unknown']:
+        warn('UNCONFIRMED afterSave* plugins — default to LEAVING ENABLED.')
+        warn('Could not confirm these are purely deploy/notification hooks. Inspect each')
+        warn('afterSave* handler: only disable if it references env-specific filesystem')
+        warn('paths, external HTTP endpoints, or deploy tooling. If it touches its own')
+        warn('field/content data, leave it enabled (disabling it may skip a migration).')
+        print()
+        for entry in by_category['unknown']:
+            found(f'[REVIEW] {_label(entry)}')
+            for pat in entry['patterns']:
+                info(f'    ↳ {pat}')
+        print()
+
+    return {
+        'disable': by_category['deploy'],
+        'field': by_category['field'],
+        'review': by_category['unknown'],
+    }
 
 
 # ── P1.13 – composer.json post-update-cmd ────────────────────────────────────
@@ -1071,7 +1176,10 @@ def main():
     deprecated_files, with_files = run_p18(templates_dir)
     all_template_files = run_p18b(templates_dir, lf_records, deprecated_files, with_files)
     run_p1_bootstrap(project_root)
-    plugins_to_disable = run_p112(project_root)
+    p112 = run_p112(project_root)
+    plugins_to_disable = p112['disable']
+    field_plugins_keep = p112['field']
+    plugins_to_review = p112['review']
     has_post_update_hook = run_p113(project_root)
     has_redactor_pkg = _composer_has_redactor(project_root)
     has_ckeditor_pkg = _composer_has_ckeditor(project_root)
@@ -1131,6 +1239,8 @@ def main():
 
     print()
     print('PLUGINS_TO_DISABLE_FOR_UPGRADE:')
+    print('<!-- Deploy/notification plugins only. Field/content plugins are NEVER -->')
+    print('<!-- listed here — see FIELD_PLUGINS_KEEP_ENABLED below. -->')
     if plugins_to_disable:
         for entry in plugins_to_disable:
             handle = entry['handle']
@@ -1142,6 +1252,31 @@ def main():
                 print(f'  - {handle}  # afterSave* registered in {pkg}')
             else:
                 print(f'  - {pkg}  # no plugin handle resolved — derive from `php craft plugin/list` and disable manually')
+    else:
+        print('  (none)')
+
+    print()
+    print('FIELD_PLUGINS_KEEP_ENABLED:')
+    print('<!-- Field/content plugins that register afterSave* hooks. DO NOT disable -->')
+    print('<!-- these for the upgrade: they run content migrations during `php craft -->')
+    print('<!-- up` that require the plugin enabled and the Craft 4 source tables -->')
+    print('<!-- intact. Disabling them is irreversible once those tables drop. -->')
+    if field_plugins_keep:
+        for entry in field_plugins_keep:
+            handle = entry['handle'] or entry['pkg']
+            print(f'  - {handle}  # field/content plugin — {entry["pkg"]}')
+    else:
+        print('  (none)')
+
+    print()
+    print('PLUGINS_FOR_MANUAL_REVIEW:')
+    print('<!-- afterSave* plugins that could not be confirmed as deploy/notification -->')
+    print('<!-- hooks. Default to LEAVING ENABLED. Only disable if the handler uses -->')
+    print('<!-- env-specific paths, external HTTP, or deploy tooling. -->')
+    if plugins_to_review:
+        for entry in plugins_to_review:
+            handle = entry['handle'] or entry['pkg']
+            print(f'  - {handle}  # review afterSave* handler — {entry["pkg"]}')
     else:
         print('  (none)')
 
