@@ -224,6 +224,14 @@ Note bootstrap constants or custom logic.
 Check `config/general.php` or project config for a temp uploads path.
 Record it.
 
+### P1 Heads-up — upgrade hygiene commands (informational, no action required)
+The upgrade skill (`craft-5-upgrade` Block U1.2) runs three official pre-upgrade
+hygiene steps before touching Composer: `project-config/rebuild`, then
+`utils/fix-field-layout-uids`, then `project-config/apply`. `fix-field-layout-uids`
+in particular addresses a known class of upgrade failures (field layout UID
+mismatches). No action needed in preflight — noting here so the large YAML diff
+it produces in U1.2 is not a surprise.
+
 ---
 
 **STOP. Report all findings as a structured summary. Flag blockers clearly.
@@ -246,8 +254,9 @@ entirely, making the `_v2` mapping in `craft-5-linkfield` strictly 1:1 and
 deterministic — removing the main class of silent empty-URL failures.
 
 ### P2.1 Confirm backup and version control
-Ask the user to confirm a full database backup has been taken and all changes
-are committed to version control. Do not proceed without both confirmed.
+Ask the user to confirm a full database backup has been taken (`php craft db/backup`
+is the recommended native, config-aware option) and all changes are committed to
+version control. Do not proceed without both confirmed.
 
 ### P2.2 Identify and propose renames
 

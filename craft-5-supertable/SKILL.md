@@ -79,6 +79,12 @@ Present this plan to the user and wait for explicit approval before proceeding.
 
 ## BLOCK S3 — Create replacement Matrix fields
 
+**Check `super-table/migrate` first** — Verbb ships a native migration command and
+Craft 5 auto-converts Matrix blocks to entry types during `php craft up`, so the
+preferred-first path is to run `php craft super-table/migrate` rather than writing
+a custom console command. See `references/supertable-migration.md` (S3) for guidance
+on evaluating it before falling back to the manual approach below.
+
 For each approved Super Table field, create a new native Craft 5 Matrix field
 with the agreed handle, entry type, and sub-fields.
 

@@ -64,6 +64,7 @@ be a no-op (or will confirm "already up to date"). Do not be surprised by this.
 Ask the user to confirm:
 - A fresh full database backup has been taken (separate from the preflight
   backup — this is the rollback point for the destructive upgrade).
+  Recommended: `php craft db/backup` — native, transactional, and config-aware.
 - All code is committed to version control.
 
 Do not proceed without both confirmed.
@@ -306,10 +307,20 @@ php craft ckeditor/convert/redactor
 plugin, and the convert command will not exist without it. Skip both if no
 Redactor fields exist.
 
-#### Run fields/auto-merge
-`php craft fields/auto-merge` requires an interactive terminal and cannot be
-run by Claude — it exits with code 1 non-interactively. Ask the user to run it
-themselves:
+#### Run fields/auto-merge (optional — skip unless you want field-count cleanup)
+
+**Duplicate fields after upgrade are an acceptable outcome** — `auto-merge` only
+reduces field count (an optimization, not a stability gain). It also carries known
+relation-merge bugs for max-relations=1 fields
+([#15869](https://github.com/craftcms/cms/issues/15869),
+[#16198](https://github.com/craftcms/cms/issues/16198),
+[#16444](https://github.com/craftcms/cms/discussions/16444)). **Recommended: skip.**
+Only proceed if you specifically want to collapse post-upgrade field proliferation,
+and only on fields that are genuinely identical in type and config.
+
+If you choose to proceed: `php craft fields/auto-merge` requires an interactive
+terminal and cannot be run by Claude — it exits with code 1 non-interactively.
+Ask the user to run it themselves:
 ```bash
 php craft fields/auto-merge
 ```
@@ -317,6 +328,12 @@ Instruct them to review each proposed merge batch carefully and only accept
 where the fields are genuinely the same type and config. If any merges are
 accepted, commit the generated migration files and run `php craft up` in all
 other environments before deploying.
+
+#### Optional: post-upgrade verification with craft-mcp
+`stimmt/craft-mcp` is a Craft 5-only MCP plugin that lets Claude inspect runtime
+deprecations, logs, and CP entry state — a useful smoke-test supplement. It is
+dev-only; install transiently and remove after sign-off. For setup and the read-only
+tool subset to use, see `craft-5-linkfield/references/post-upgrade-verification.md`.
 
 #### Generate upgrade-deploy notes (optional)
 Assume the user already has a deploy process for this project. Do not produce
@@ -344,7 +361,7 @@ Generated [date]. Integrate these deltas into your existing deploy process.
 - Templates patched: [list, or "none"]
 - fields/auto-merge migration files committed: [yes / no]
 - Matching pre-upgrade code commit (rollback target): `[short SHA]`
-- Matching pre-upgrade DB backup (rollback target): `[path/filename]`
+- Matching pre-upgrade DB backup (rollback target): `[path/filename]` — take with `php craft db/backup` before step U2.1
 
 ## Production re-enable
 These plugins were disabled locally during the upgrade and must be re-enabled

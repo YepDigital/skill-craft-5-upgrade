@@ -33,7 +33,8 @@ findings, and wait for explicit confirmation before proceeding.**
 - Minimal template changes only. Do not refactor beyond migration requirements.
 - Never delete database content. `--cleanup` removes field definitions only.
 
-**Rollback:** restore DB backup, `git checkout .`, `composer install`.
+**Rollback:** restore DB backup (`php craft db/backup` before step L2.1 is the
+recommended pre-migration dump), `git checkout .`, `composer install`.
 
 ---
 
@@ -257,6 +258,11 @@ least 3 entries using each migrated field. For every entry, confirm:
 2. If the source had a label (`customText`), the label field is populated.
 3. The link type (URL / entry / asset) is correct.
 
+**Optional craft-mcp verification:** `stimmt/craft-mcp` lets Claude query actual
+rendered link values, catching the silent empty-URL failure mode that CP row counts
+cannot detect. Install transiently for verification, remove after sign-off. See
+`references/post-upgrade-verification.md` for setup and the read-only tool subset.
+
 **Type "verified" to continue to Block L3.** Do not proceed on partial checks.
 
 ---
@@ -419,13 +425,22 @@ php craft ckeditor/convert/redactor
 plugin, and the convert command will not exist without it. Skip both if no
 Redactor fields exist.
 
-### L4.5 Run fields/auto-merge
-`php craft fields/auto-merge` requires an interactive terminal and cannot be
-run by Claude. Ask the user to run it themselves:
+### L4.5 Run fields/auto-merge (optional — skip unless you want field-count cleanup)
+
+**Duplicate fields after upgrade are an acceptable outcome** — `auto-merge` only
+reduces field count (an optimization, not a stability gain). It also carries known
+relation-merge bugs for max-relations=1 fields
+([#15869](https://github.com/craftcms/cms/issues/15869),
+[#16198](https://github.com/craftcms/cms/issues/16198),
+[#16444](https://github.com/craftcms/cms/discussions/16444)). **Recommended: skip.**
+Only proceed if you specifically want to collapse post-upgrade field proliferation,
+and only on fields that are genuinely identical in type and config.
+
+If you choose to proceed: `php craft fields/auto-merge` requires an interactive
+terminal and cannot be run by Claude. Ask the user to run it themselves:
 ```bash
 php craft fields/auto-merge
 ```
-
 Instruct them to review each proposed merge batch carefully and only accept
 where the fields are genuinely the same type and config. If any merges are
 accepted, commit the generated migration files and run `php craft up` in all
@@ -474,6 +489,9 @@ Produce a structured summary:
   - Any fields where pre-existing duplicate handles caused data to be
     unmigratable (only if not remediated in preflight — manual re-entry required)
   - Re-enable any plugins listed in `PLUGINS_TO_DISABLE_FOR_UPGRADE` on production
+  - Optional: `stimmt/craft-mcp` post-upgrade verification (resolved link values,
+    deprecations, logs) — see `references/post-upgrade-verification.md`. Dev-only,
+    remove after sign-off.
 
 ### L5.2 Generate upgrade-deploy notes (optional)
 
@@ -512,7 +530,7 @@ on production will not reproduce the migration. Schedule maintenance and pin
 the matching pre-upgrade backup before importing.
 
 - Local Craft 5 DB dump for import: `[MYSQL_CMD] [DB_NAME] > ~/Desktop/[project]-craft5-[date].sql`
-- Matching pre-upgrade backup (rollback target): `[path/filename]`
+- Matching pre-upgrade backup (rollback target): `[path/filename]` — take with `php craft db/backup` before step L2.1
 - Matching pre-upgrade code commit (rollback target): `[short SHA]`
 
 ## Production re-enable

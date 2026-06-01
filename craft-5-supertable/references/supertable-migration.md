@@ -34,11 +34,37 @@ Present this plan to the user and wait for approval before proceeding.
 
 ## S3 — Create replacement Matrix fields
 
-For each approved Super Table field, create a new native Craft 5 Matrix field
-with the agreed handle, entry type, and sub-fields. Use `Craft::$app->getFields()->saveField()`.
+**Preferred-first path: `php craft super-table/migrate`**
+
+Verbb ships a native migration command (`super-table/migrate`) and Craft 5
+auto-converts Matrix blocks to entry types during `php craft up`. Before writing
+a custom console command, run:
+
+```bash
+php craft super-table/migrate --dry-run
+```
+
+If it reports the fields cleanly and its output matches the S2 plan, proceed with
+the live run. This is the simpler path — validate against a real upgraded dataset
+before deciding the custom approach is needed.
+
+**Fallback — custom console command:**
+If `super-table/migrate` is unavailable or produces unexpected output, write a
+custom console command following the `MigrateLinkfieldController` pattern. For
+each approved field, create the native Matrix field with the agreed handle, entry
+type, and sub-fields using `Craft::$app->getFields()->saveField()`.
+
+*Note: the `super-table/migrate` path is documented here as the preferred option
+but has not yet been validated against a real upgraded dataset in this suite.
+Validate its output against S2 before relying on it over the custom approach.*
 
 ## S4 — Migrate data
 
+**If using `super-table/migrate` (from S3):**
+The Verbb command handles data migration. Verify element content is transferred
+correctly before proceeding to S5.
+
+**If using the custom console command (fallback):**
 Write a console command (following the same pattern as `MigrateLinkfieldController`)
 to copy element content from Super Table's internal storage to the native Matrix field.
 Use `getElementById()` for element loading; do not use `:notempty:` element queries.
