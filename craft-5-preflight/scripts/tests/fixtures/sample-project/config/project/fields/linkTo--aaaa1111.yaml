@@ -1,0 +1,6 @@
+handle: linkTo
+name: Hero Link
+type: lenz\linkfield\fields\LinkField
+settings:
+  columnSuffix: null
+  allowedLinkNames: '*'

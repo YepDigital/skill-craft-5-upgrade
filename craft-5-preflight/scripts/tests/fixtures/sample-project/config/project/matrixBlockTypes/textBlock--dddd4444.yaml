@@ -1,0 +1,25 @@
+field: bbbb2222
+handle: textBlock
+name: Text Block
+fields:
+  ff111111:
+    handle: heading
+    name: Heading
+    type: craft\fields\PlainText
+    settings: {}
+  ff222222:
+    handle: bodyText
+    name: Body Text
+    type: craft\redactor\Field
+    settings: {}
+  ff333333:
+    handle: linkTo
+    name: Link To
+    type: lenz\linkfield\fields\LinkField
+    settings:
+      columnSuffix: null
+  f0c1e584:
+    handle: buttons
+    name: Buttons
+    type: verbb\supertable\fields\SuperTableField
+    settings: {}

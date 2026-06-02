@@ -1,0 +1,4 @@
+handle: siteUrl
+name: Site URL
+type: craft\fields\Url
+settings: {}

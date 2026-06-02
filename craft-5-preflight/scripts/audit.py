@@ -3,13 +3,20 @@
 Craft 5 preflight audit script — replaces audit.sh
 Run from the project root:
     python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py [project_root]
-Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.8, P1.8b, P1.10b, P1.12, P1.13, P1.14
+Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8, P1.8b, P1.10b, P1.12, P1.13, P1.14
+
+Field inventory source: the `fields` DB table is authoritative when --mysql-cmd
+and --db-name are supplied (it is cross-checked against project config and any
+discrepancy is flagged). Without them, the (recursive) project-config parser is
+used as an offline fallback.
 """
 
 import argparse
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -130,6 +137,16 @@ def info(msg):  print(f'  {msg}')
 def none_found(): print('  (none)')
 
 
+def ctx_label(rec):
+    """Human-readable location label for a field record (any collector shape)."""
+    ctx = rec.get('context', 'top-level') or 'top-level'
+    if ctx == 'top-level':
+        return '[top-level field]'
+    parent = rec.get('parent_handle') or '?'
+    bt = rec.get('block_type_name') or '?'
+    return f'[{ctx} sub-field: {parent} / block type: {bt}]'
+
+
 # ── Field type constants ──────────────────────────────────────────────────────
 
 LF_TYPES = (
@@ -192,67 +209,25 @@ def _lf_record(handle, name, settings, filepath, context, parent_handle='', bloc
     }
 
 
-def _walk_block_types(data, filepath, is_st, parent_handle):
+def _field_uid_from_path(filepath):
+    """Field YAMLs are named {handle}--{uuid}.yaml; return the bare UUID."""
+    return Path(filepath).stem.split('--')[-1]
+
+
+def _load_external_blocks(config_dir, subdir):
     """
-    Walk blockTypes (Super Table or Matrix) and return (lf_fields, st_sub_handles).
-    st_sub_handles: ALL sub-field handles when is_st=True (for P1.7a dup detection).
-    """
-    lf_fields = []
-    st_sub_handles = []
-    ctx = 'supertable' if is_st else 'matrix'
+    Load externally-stored block types from config/project/<subdir>/.
 
-    block_types = data.get('blockTypes', {}) or {}
-    if not isinstance(block_types, dict):
-        return lf_fields, st_sub_handles
-
-    for bt_uid, bt_data in block_types.items():
-        if not isinstance(bt_data, dict):
-            continue
-        bt_name = bt_data.get('name', '') or bt_uid
-        fields_in_bt = bt_data.get('fields', {}) or {}
-        if not isinstance(fields_in_bt, dict):
-            continue
-
-        for f_uid, f_data in fields_in_bt.items():
-            if not isinstance(f_data, dict):
-                continue
-            f_handle = f_data.get('handle', '') or ''
-            f_type = f_data.get('type', '') or ''
-
-            if is_st and f_handle:
-                st_sub_handles.append({
-                    'handle': f_handle,
-                    'name': f_data.get('name', '') or '',
-                    'type': f_type,
-                    'filepath': filepath,
-                    'parent_st_handle': parent_handle,
-                    'block_type_name': bt_name,
-                })
-
-            if f_type in LF_TYPES:
-                lf_fields.append(_lf_record(
-                    f_handle, f_data.get('name', '') or '',
-                    _get_settings(f_data), filepath, ctx,
-                    parent_handle, bt_name, f_type,
-                ))
-
-    return lf_fields, st_sub_handles
-
-
-def _load_st_external_blocks(config_dir):
-    """
-    Load Super Table block types from config/project/superTableBlockTypes/.
-
-    Newer Super Table releases store block types in per-file YAMLs here rather
-    than inline under the ST field's blockTypes: key. Each file references its
-    parent ST field UID via a 'field' (or 'fieldId') key.
+    Newer Super Table and modern Matrix releases store block types in per-file
+    YAMLs here rather than inline under the parent field's blockTypes: key. Each
+    file references its parent field UID via a 'field' (or 'fieldId') key.
     Returns {parent_field_uid: {bt_uid: bt_data}}.
     """
-    st_dir = config_dir / 'superTableBlockTypes'
+    bt_dir = config_dir / subdir
     result = defaultdict(dict)
-    if not st_dir.is_dir():
+    if not bt_dir.is_dir():
         return result
-    for filepath, data in iter_config_yamls(st_dir):
+    for filepath, data in iter_config_yamls(bt_dir):
         parent_uid = (
             data.get('field') or
             data.get('fieldId') or
@@ -261,58 +236,309 @@ def _load_st_external_blocks(config_dir):
         if not parent_uid:
             continue
         bt_uid = Path(filepath).stem
+        # Remember the block type's own source file so nested sub-fields are
+        # reported against the file the operator must actually edit in P2, not
+        # the parent field's YAML.
+        if isinstance(data, dict):
+            data['__src__'] = filepath
         result[str(parent_uid)][bt_uid] = data
     return result
 
 
+def _resolve_block_types(field_data, field_uid, field_type, st_external, mt_external):
+    """Return the merged block-type dict for an ST/Matrix field.
+
+    Combines the inline blockTypes: key (older storage) with any externally
+    stored block types (newer storage), keyed by the field's bare UUID.
+    """
+    merged = dict(field_data.get('blockTypes') or {})
+    if not field_uid:
+        return merged
+    if field_type == ST_TYPE:
+        merged.update(st_external.get(field_uid, {}))
+    elif field_type == MT_TYPE:
+        merged.update(mt_external.get(field_uid, {}))
+    return merged
+
+
 def collect_all_fields(config_dir):
     """
-    Walk all project config YAML files.
-    Returns (lf_records, st_sub_handles, st_field_count):
+    Walk all project config YAML files, recursing into block types.
+
+    Returns (lf_records, st_sub_handles, st_field_count, all_fields):
       lf_records:     every linkfield definition found (all contexts)
       st_sub_handles: every ST sub-field handle (for P1.7a dup detection)
-      st_field_count: number of ST-typed field YAMLs found (distinct from
-                      whether sub-handles were collected — used to distinguish
-                      "ST not installed" from "ST installed, sub-field scan failed")
+      st_field_count: number of ST-typed fields found (top-level + nested);
+                      distinct from whether sub-handles were collected — used to
+                      tell "ST not installed" from "ST installed, scan failed"
+      all_fields:     EVERY field (top-level + every block-type context), used
+                      for the global duplicate-handle report and type collectors
+
+    Both Super Table AND Matrix external block types are merged, and nested
+    block types (e.g. a Super Table field inside a Matrix block) are resolved
+    recursively — so a field is never missed just because its parent field does
+    not appear as a top-level YAML.
     """
     lf_records = []
     st_sub_handles = []
-    st_field_count = 0
-    st_external = _load_st_external_blocks(config_dir)
+    all_fields = []
+    st_counter = {'n': 0}
+    st_external = _load_external_blocks(config_dir, 'superTableBlockTypes')
+    mt_external = _load_external_blocks(config_dir, 'matrixBlockTypes')
 
+    def record(handle, name, ftype, settings, filepath, context,
+               parent_handle, block_type_name):
+        all_fields.append({
+            'handle': handle, 'name': name, 'type': ftype,
+            'context': context, 'parent_handle': parent_handle,
+            'block_type_name': block_type_name, 'filepath': filepath,
+        })
+        if ftype == ST_TYPE:
+            st_counter['n'] += 1
+        if ftype in LF_TYPES:
+            lf_records.append(_lf_record(
+                handle, name, settings, filepath, context,
+                parent_handle, block_type_name, ftype,
+            ))
+
+    def walk(parent_type, parent_handle, block_types, filepath, seen_uids):
+        ctx = 'supertable' if parent_type == ST_TYPE else 'matrix'
+        if not isinstance(block_types, dict):
+            return
+        for bt_uid, bt_data in block_types.items():
+            if not isinstance(bt_data, dict):
+                continue
+            bt_name = bt_data.get('name', '') or bt_uid
+            # Externally-stored blocks carry their own source path; inline blocks
+            # live in the parent field's YAML (filepath).
+            bt_file = bt_data.get('__src__', filepath)
+            fields_in_bt = bt_data.get('fields', {}) or {}
+            if not isinstance(fields_in_bt, dict):
+                continue
+            for f_uid, f_data in fields_in_bt.items():
+                if not isinstance(f_data, dict):
+                    continue
+                f_handle = f_data.get('handle', '') or ''
+                f_type = f_data.get('type', '') or ''
+                f_name = f_data.get('name', '') or ''
+                f_settings = _get_settings(f_data)
+
+                if parent_type == ST_TYPE and f_handle:
+                    st_sub_handles.append({
+                        'handle': f_handle, 'name': f_name, 'type': f_type,
+                        'filepath': bt_file, 'parent_st_handle': parent_handle,
+                        'block_type_name': bt_name,
+                    })
+
+                record(f_handle, f_name, f_type, f_settings, bt_file, ctx,
+                       parent_handle, bt_name)
+
+                # Recurse when the sub-field is itself an ST/Matrix field, so
+                # ST-inside-Matrix (and any depth) resolves. Guard UID cycles.
+                if f_type in (ST_TYPE, MT_TYPE):
+                    key = f_uid or f_handle
+                    if key and key not in seen_uids:
+                        seen_uids.add(key)
+                        nested = _resolve_block_types(
+                            f_data, f_uid, f_type, st_external, mt_external
+                        )
+                        walk(f_type, f_handle, nested, filepath, seen_uids)
+
+    field_sep = os.sep + 'fields' + os.sep
     for filepath, data in iter_config_yamls(config_dir):
         field_type = data.get('type', '') or ''
-        parent_handle = data.get('handle', '?') or '?'
+        if not field_type:
+            continue
+        handle = data.get('handle', '') or ''
+        name = data.get('name', '') or ''
+        settings = _get_settings(data)
+        field_uid = _field_uid_from_path(filepath)
 
-        if field_type in LF_TYPES:
-            lf_records.append(_lf_record(
-                data.get('handle', ''), data.get('name', ''),
-                _get_settings(data), filepath, 'top-level',
-                field_type=field_type,
-            ))
-        elif field_type in (ST_TYPE, MT_TYPE):
-            if field_type == ST_TYPE:
-                st_field_count += 1
-                # For Super Table fields, merge in any externally-stored block types.
-                # Newer ST releases store block types in superTableBlockTypes/<uid>.yaml
-                # keyed by the field's bare UUID, not the full filename stem.
-                # Field YAMLs are named {handle}--{uuid}.yaml, so we must strip the
-                # handle prefix before looking up in the external block types dict.
-                if st_external:
-                    field_uid = Path(filepath).stem.split('--')[-1]
-                    external_bts = st_external.get(field_uid)
-                    if external_bts:
-                        merged = dict(data.get('blockTypes') or {})
-                        merged.update(external_bts)
-                        data = dict(data)
-                        data['blockTypes'] = merged
-            sub_lf, sub_st = _walk_block_types(
-                data, filepath, is_st=(field_type == ST_TYPE), parent_handle=parent_handle
+        # Only YAMLs under config/project/fields/ are top-level field definitions.
+        # Other config (entry types, sites, …) can also carry a `type` key — they
+        # must not pollute the global field inventory. Linkfield/ST/Matrix matches
+        # below are namespace-specific so this filter only affects native types.
+        if field_sep in filepath:
+            record(handle, name, field_type, settings, filepath, 'top-level', '', '')
+
+        if field_type in (ST_TYPE, MT_TYPE):
+            block_types = _resolve_block_types(
+                data, field_uid, field_type, st_external, mt_external
             )
-            lf_records.extend(sub_lf)
-            st_sub_handles.extend(sub_st)
+            walk(field_type, handle, block_types, filepath, {field_uid})
 
-    return lf_records, st_sub_handles, st_field_count
+    return lf_records, st_sub_handles, st_counter['n'], all_fields
+
+
+# ── DB-authoritative field inventory ──────────────────────────────────────────
+#
+# The `fields` table is the source of truth: it lists every field in every
+# context with its type and settings, immune to project-config structural drift
+# across Craft/plugin versions. When MYSQL_CMD/DB_NAME are supplied (established
+# in SKILL.md P1.2, which runs before P1.7), it drives every inventory and the
+# global duplicate-handle report, and is diffed against the config parser to
+# flag any discrepancy. MySQL only.
+
+_MYSQL_ESCAPES = {'\\t': '\t', '\\n': '\n', '\\0': '\0', '\\\\': '\\'}
+
+
+def _mysql_unescape(s):
+    """Reverse mysql --batch output escaping (\\t \\n \\0 \\\\)."""
+    return re.sub(r'\\.', lambda m: _MYSQL_ESCAPES.get(m.group(0), m.group(0)[1]), s)
+
+
+def _run_mysql(mysql_cmd, db_name, sql):
+    """Run a read-only SELECT. Returns a list of column-lists, or None on failure."""
+    try:
+        argv = shlex.split(mysql_cmd) + ['-N', '-B', '-e', sql, db_name]
+    except ValueError:
+        return None
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    rows = []
+    for line in proc.stdout.split('\n'):
+        if line == '':
+            continue
+        rows.append([_mysql_unescape(c) for c in line.split('\t')])
+    return rows
+
+
+def _db_block_type_parents(mysql_cmd, db_name, table):
+    """Map block-type id → (parent field handle, block type name) for a table.
+
+    matrixblocktypes has a name column; supertableblocktypes does not.
+    """
+    has_name = (table == 'matrixblocktypes')
+    cols = 'bt.id, ' + ('bt.name' if has_name else "''") + ', f.handle'
+    rows = _run_mysql(
+        mysql_cmd, db_name,
+        f'SELECT {cols} FROM {table} bt JOIN fields f ON f.id = bt.fieldId'
+    )
+    result = {}
+    for row in (rows or []):
+        if len(row) >= 3:
+            result[row[0]] = (row[2], row[1])
+    return result
+
+
+def build_db_inventory(mysql_cmd, db_name, config_index=None):
+    """Build the authoritative field inventory from the DB.
+
+    Returns a dict with the same record shapes collect_all_fields produces
+    (lf_records, st_sub_handles, st_field_count, all_fields), or None if the
+    DB is unreachable / the query fails. config_index (optional) maps
+    (handle, context, parent_handle) → filepath for best-effort enrichment.
+    """
+    rows = _run_mysql(
+        mysql_cmd, db_name,
+        "SELECT id, COALESCE(uid,''), COALESCE(handle,''), COALESCE(name,''), "
+        "COALESCE(context,''), COALESCE(type,''), COALESCE(settings,'') FROM fields"
+    )
+    if rows is None:
+        return None
+
+    mbt = _db_block_type_parents(mysql_cmd, db_name, 'matrixblocktypes')
+    sbt = _db_block_type_parents(mysql_cmd, db_name, 'supertableblocktypes')
+    config_index = config_index or {}
+
+    lf_records, st_sub_handles, all_fields = [], [], []
+    st_field_count = 0
+
+    for row in rows:
+        if len(row) < 7:
+            continue
+        _id, _uid, handle, name, context, ftype, settings_raw = row[:7]
+        settings = _get_settings({'settings': settings_raw})
+
+        if context in ('', 'global'):
+            ctx_label_name, parent_handle, bt_name = 'top-level', '', ''
+        elif context.startswith('matrixBlockType:'):
+            parent_handle, bt_name = mbt.get(context.split(':', 1)[1], ('?', ''))
+            ctx_label_name = 'matrix'
+        elif context.startswith('superTableBlockType:'):
+            parent_handle, _ = sbt.get(context.split(':', 1)[1], ('?', ''))
+            ctx_label_name, bt_name = 'supertable', ''
+        else:
+            ctx_label_name, parent_handle, bt_name = context, '', ''
+
+        filepath = config_index.get((handle, ctx_label_name, parent_handle), '')
+
+        all_fields.append({
+            'handle': handle, 'name': name, 'type': ftype,
+            'context': ctx_label_name, 'parent_handle': parent_handle,
+            'block_type_name': bt_name, 'filepath': filepath,
+        })
+        if ftype == ST_TYPE:
+            st_field_count += 1
+        if ctx_label_name == 'supertable' and handle:
+            st_sub_handles.append({
+                'handle': handle, 'name': name, 'type': ftype,
+                'filepath': filepath, 'parent_st_handle': parent_handle,
+                'block_type_name': bt_name,
+            })
+        if ftype in LF_TYPES:
+            lf_records.append(_lf_record(
+                handle, name, settings, filepath, ctx_label_name,
+                parent_handle, bt_name, ftype,
+            ))
+
+    return {
+        'lf_records': lf_records,
+        'st_sub_handles': st_sub_handles,
+        'st_field_count': st_field_count,
+        'all_fields': all_fields,
+    }
+
+
+def _config_filepath_index(config_all_fields):
+    """Index config-parsed fields by (handle, context, parent_handle) → filepath."""
+    index = {}
+    for f in config_all_fields:
+        key = (f.get('handle', ''), f.get('context', ''), f.get('parent_handle', ''))
+        if f.get('filepath') and key not in index:
+            index[key] = f['filepath']
+    return index
+
+
+def report_db_config_discrepancy(config_all_fields, db_all_fields):
+    """Diff config-parsed vs DB field sets by (handle, context, type).
+
+    A clean diff is the trust signal that the config parser is complete; a dirty
+    diff tells the operator the config-only path is unreliable on this project.
+    """
+    section('P1.7 CONFIG/DB FIELD INVENTORY CROSS-CHECK')
+
+    def keyset(fields):
+        return {(f.get('handle', ''), f.get('context', ''), f.get('type', ''))
+                for f in fields if f.get('handle')}
+
+    cfg, db = keyset(config_all_fields), keyset(db_all_fields)
+    missed_by_config = db - cfg
+    only_in_config = cfg - db
+
+    if not missed_by_config and not only_in_config:
+        info('Config parser matches the database exactly — inventory is complete.')
+        return
+
+    if missed_by_config:
+        warn('CONFIG/DB MISMATCH — fields in the DB the config parser MISSED:')
+        warn('(The DB figures above are authoritative; config-only runs would')
+        warn(' under-report these.)')
+        for handle, ctx, ftype in sorted(missed_by_config):
+            tname = (ftype or '?').rsplit('\\', 1)[-1]
+            info(f'    → {handle}  [{ctx}]  type: {tname}')
+        print()
+
+    if only_in_config:
+        warn('Fields in config NOT present in the DB (stale config / pending apply):')
+        for handle, ctx, ftype in sorted(only_in_config):
+            tname = (ftype or '?').rsplit('\\', 1)[-1]
+            info(f'    → {handle}  [{ctx}]  type: {tname}')
+        print()
 
 
 # ── P1.7 – Linkfield inventory ────────────────────────────────────────────────
@@ -418,17 +644,86 @@ def run_p17b(lf_records):
     return dupes
 
 
+# ── P1.7d – Global duplicate handles ──────────────────────────────────────────
+
+def run_p17d(all_fields):
+    """Report handles that collide across ALL fields and contexts.
+
+    Craft 5 deduplicates handles globally across every field, so this is the
+    superset of P1.7a (ST-only) and P1.7b (linkfield-only). Groups are split:
+      risky         — contains a linkfield: real getAllFields() data-loss risk,
+                      must be remediated in Block P2.
+      informational — native-type duplicates only: Craft 5 auto-suffixes them
+                      (handle → handle2), content-safe.
+    """
+    section('P1.7d GLOBAL DUPLICATE HANDLES (all fields, all contexts)')
+    if not all_fields:
+        info('No fields collected — skipping.')
+        return {'risky': {}, 'informational': {}}
+
+    by_handle = defaultdict(list)
+    for f in all_fields:
+        if f.get('handle'):
+            by_handle[f['handle']].append(f)
+    dupes = {h: recs for h, recs in by_handle.items() if len(recs) > 1}
+    if not dupes:
+        info('No duplicate handles found across all fields and contexts.')
+        return {'risky': {}, 'informational': {}}
+
+    risky, informational = {}, {}
+    for handle, recs in dupes.items():
+        if any(r.get('type') in LF_TYPES for r in recs):
+            risky[handle] = recs
+        else:
+            informational[handle] = recs
+
+    def _dump(groups):
+        for handle, recs in sorted(groups.items()):
+            found(f"Duplicate handle: '{handle}'  ({len(recs)} instances)")
+            for r in recs:
+                tname = (r.get('type') or '?').rsplit('\\', 1)[-1]
+                info(f"    → {ctx_label(r)}  type: {tname}")
+                if r.get('filepath'):
+                    info(f"      ({r['filepath']})")
+
+    if risky:
+        print()
+        warn('RISKY duplicates — a linkfield shares this handle across contexts.')
+        warn("craft-5-linkfield's getAllFields() surfaces only one instance per")
+        warn('handle, so duplicate linkfield data can be lost. Remediate in Block P2.')
+        print()
+        _dump(risky)
+
+    if informational:
+        print()
+        info('Informational duplicates — native-type handles only (no linkfield).')
+        info('Craft 5 consolidates/auto-suffixes these (handle → handle2); content-safe.')
+        info('Listed for completeness; no pre-upgrade action required.')
+        print()
+        _dump(informational)
+
+    return {'risky': risky, 'informational': informational}
+
+
 # ── P1.7c – URL field promotion candidates ────────────────────────────────────
 
-def _collect_url_fields(config_dir):
-    """Collect all craft\\fields\\Url fields from project config."""
+def _collect_url_fields(all_fields):
+    """Collect all craft\\fields\\Url fields from the full field inventory.
+
+    Operates on the recursively-collected field list (or DB rows), so URL fields
+    nested inside Matrix/Super Table block types are included — not just
+    top-level fields.
+    """
     url_fields = []
-    for filepath, data in iter_config_yamls(config_dir):
-        if (data.get('type', '') or '') == URL_TYPE:
+    for f in all_fields:
+        if f.get('type') == URL_TYPE and f.get('handle'):
             url_fields.append({
-                'handle': data.get('handle', '') or '',
-                'name': data.get('name', '') or '',
-                'filepath': filepath,
+                'handle': f['handle'],
+                'name': f.get('name', '') or '',
+                'filepath': f.get('filepath', '') or '',
+                'context': f.get('context', 'top-level'),
+                'parent_handle': f.get('parent_handle', ''),
+                'block_type_name': f.get('block_type_name', ''),
                 'breaking_refs': [],
                 'all_ref_files': set(),
             })
@@ -495,8 +790,9 @@ def run_p17c(url_fields, templates_dir):
         field['all_ref_files'] = ref_files
 
         print()
-        found(f"handle: '{handle}'  [name: {field['name']!r}]")
-        info(f"  file: {field['filepath']}")
+        found(f"handle: '{handle}'  [name: {field['name']!r}]  {ctx_label(field)}")
+        if field.get('filepath'):
+            info(f"  file: {field['filepath']}")
 
         if breaking:
             any_breaking = True
@@ -527,15 +823,22 @@ def run_p17c(url_fields, templates_dir):
 
 # ── P1.14 – Redactor fields (CKEditor conversion candidates) ─────────────────
 
-def _collect_redactor_fields(config_dir):
-    """Collect all craft\\redactor\\Field fields from project config."""
+def _collect_redactor_fields(all_fields):
+    """Collect all craft\\redactor\\Field fields from the full field inventory.
+
+    Operates on the recursively-collected field list (or DB rows), so Redactor
+    fields nested inside Matrix/Super Table block types are included.
+    """
     redactor_fields = []
-    for filepath, data in iter_config_yamls(config_dir):
-        if (data.get('type', '') or '') == REDACTOR_TYPE:
+    for f in all_fields:
+        if f.get('type') == REDACTOR_TYPE and f.get('handle'):
             redactor_fields.append({
-                'handle': data.get('handle', '') or '',
-                'name': data.get('name', '') or '',
-                'filepath': filepath,
+                'handle': f['handle'],
+                'name': f.get('name', '') or '',
+                'filepath': f.get('filepath', '') or '',
+                'context': f.get('context', 'top-level'),
+                'parent_handle': f.get('parent_handle', ''),
+                'block_type_name': f.get('block_type_name', ''),
             })
     return redactor_fields
 
@@ -583,8 +886,9 @@ def run_p114(redactor_fields, project_root):
     info(f'Found {len(redactor_fields)} Redactor field(s):')
     for f in redactor_fields:
         print()
-        found(f"handle: '{f['handle']}'  [name: {f['name']!r}]")
-        info(f"  file: {f['filepath']}")
+        found(f"handle: '{f['handle']}'  [name: {f['name']!r}]  {ctx_label(f)}")
+        if f.get('filepath'):
+            info(f"  file: {f['filepath']}")
 
     print()
     if has_ckeditor:
@@ -964,9 +1268,10 @@ def _resolve_plugin_handle(pkg_key, composer_map):
 def run_p112(project_root):
     section('P1.12 PLUGINS WITH afterSave* EVENT HOOKS')
     vendor_dir = project_root / 'vendor'
+    empty = {'disable': [], 'field': [], 'review': []}
     if not vendor_dir.is_dir():
         warn(f'{vendor_dir} not found — skipping')
-        return []
+        return empty
 
     info('Scanning vendor plugins for afterSave* event registrations...')
     info('(May take a moment on large vendor directories.)')
@@ -977,7 +1282,7 @@ def run_p112(project_root):
         vendor_names = sorted(os.listdir(str(vendor_dir)))
     except OSError:
         warn('Could not read vendor/ directory.')
-        return []
+        return empty
 
     for vendor_name in vendor_names:
         if vendor_name.startswith('.') or vendor_name in _SKIP_VENDORS:
@@ -1148,6 +1453,16 @@ def main():
         'project_root', nargs='?', default='.',
         help='Path to the Craft project root (default: current directory)'
     )
+    parser.add_argument(
+        '--mysql-cmd', default=None,
+        help='MySQL client invocation from P1.2, e.g. "mysql -h 127.0.0.1 -u root". '
+             'When given with --db-name, the fields table is the authoritative '
+             'inventory source and is cross-checked against project config.'
+    )
+    parser.add_argument(
+        '--db-name', default=None,
+        help='Database name (DB_NAME from P1.2). Required for the DB inventory path.'
+    )
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve()
@@ -1158,20 +1473,45 @@ def main():
         print('[INFO] PyYAML not available — using built-in YAML parser.')
         print('[INFO] For broader YAML compatibility: pip install pyyaml')
 
-    # Collect field data from project config
+    # Collect field data from project config (always — it is the offline fallback
+    # and supplies filepaths the DB lacks).
     if config_dir.is_dir():
-        lf_records, st_sub_handles, st_field_count = collect_all_fields(config_dir)
-        url_fields = _collect_url_fields(config_dir)
-        redactor_fields = _collect_redactor_fields(config_dir)
+        cfg_lf, cfg_st, cfg_stc, cfg_all = collect_all_fields(config_dir)
     else:
-        lf_records, st_sub_handles, st_field_count = [], [], 0
-        url_fields, redactor_fields = [], []
+        cfg_lf, cfg_st, cfg_stc, cfg_all = [], [], 0, []
         print(f'\n[WARN] {config_dir} not found — P1.7/P1.7a/P1.7b/P1.7c/P1.14 sections skipped.')
 
+    # DB is authoritative when reachable. Fall back to config on absence/failure.
+    inventory_source = 'config'
+    db_inv = None
+    if args.mysql_cmd and args.db_name:
+        db_inv = build_db_inventory(
+            args.mysql_cmd, args.db_name, _config_filepath_index(cfg_all)
+        )
+        if db_inv is None:
+            print('\n[WARN] --mysql-cmd/--db-name supplied but the fields query failed '
+                  '(unreachable DB or auth error). Falling back to project config.')
+
+    if db_inv is not None:
+        inventory_source = 'db'
+        lf_records = db_inv['lf_records']
+        st_sub_handles = db_inv['st_sub_handles']
+        st_field_count = db_inv['st_field_count']
+        all_fields = db_inv['all_fields']
+    else:
+        lf_records, st_sub_handles, st_field_count, all_fields = \
+            cfg_lf, cfg_st, cfg_stc, cfg_all
+
+    url_fields = _collect_url_fields(all_fields)
+    redactor_fields = _collect_redactor_fields(all_fields)
+
     # ── Run all sections ──────────────────────────────────────────────────────
+    if db_inv is not None:
+        report_db_config_discrepancy(cfg_all, all_fields)
     run_p17(lf_records)
     run_p17a(st_sub_handles, st_field_count)
     run_p17b(lf_records)
+    p17d = run_p17d(all_fields)
     url_fields = run_p17c(url_fields, templates_dir) or url_fields
     deprecated_files, with_files = run_p18(templates_dir)
     all_template_files = run_p18b(templates_dir, lf_records, deprecated_files, with_files)
@@ -1187,6 +1527,14 @@ def main():
 
     # ── State file summary ────────────────────────────────────────────────────
     print(f'\n{SEP}\n  STATE FILE SUMMARY — copy into .craft5-upgrade.md (Block P3)\n{SEP}')
+
+    print()
+    if inventory_source == 'db':
+        print('FIELD_INVENTORY_SOURCE: db  # authoritative — fields table, cross-checked vs config')
+    elif config_dir.is_dir():
+        print('FIELD_INVENTORY_SOURCE: config  # DB not provided/unreachable — pass --mysql-cmd/--db-name for authoritative counts')
+    else:
+        print('FIELD_INVENTORY_SOURCE: none  # no config/project dir and no DB')
 
     if lf_records:
         print()
@@ -1221,6 +1569,23 @@ def main():
                 print('    breaking_refs: (none detected)')
     else:
         print('  (none)')
+
+    print()
+    print('## Global duplicate handles')
+    print('<!-- Craft 5 deduplicates handles globally. Risky = a linkfield shares the -->')
+    print('<!-- handle (getAllFields data-loss risk; remediate in P2). Informational = -->')
+    print('<!-- native-type duplicates Craft 5 auto-suffixes (content-safe). -->')
+    print('GLOBAL_DUPLICATE_HANDLES:')
+    risky = (p17d or {}).get('risky', {})
+    informational = (p17d or {}).get('informational', {})
+    if not risky and not informational:
+        print('  (none)')
+    else:
+        for handle in sorted(risky):
+            ctxs = ', '.join(sorted({ctx_label(r) for r in risky[handle]}))
+            print(f'  - handle: {handle}  # RISKY (linkfield) — {ctxs}')
+        for handle in sorted(informational):
+            print(f'  - handle: {handle}  # informational (native, content-safe)')
 
     print()
     print('DEPRECATED_API_FILES:')

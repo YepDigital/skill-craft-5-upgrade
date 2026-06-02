@@ -1,0 +1,4 @@
+handle: heading
+name: Heading
+type: craft\fields\PlainText
+settings: {}

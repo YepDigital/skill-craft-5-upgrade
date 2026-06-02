@@ -1,0 +1,14 @@
+field: f0c1e584
+fields:
+  fa111111:
+    handle: button
+    name: Button
+    type: lenz\linkfield\fields\LinkField
+    settings:
+      columnSuffix: null
+      allowedLinkNames: '*'
+  fa222222:
+    handle: profileUrl
+    name: Profile URL
+    type: craft\fields\Url
+    settings: {}

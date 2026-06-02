@@ -49,12 +49,24 @@ Each skill:
   carried through the state file).
 
 ### craft-5-preflight
-- `scripts/audit.py` — read-only audit (P1.7, P1.7a, P1.7b, P1.7c, P1.8,
-  P1.8b, P1.10b, P1.12, P1.13): linkfield inventory, Super Table duplicate
-  handles, non-ST duplicate handles, URL→Link auto-promotion candidates,
-  deprecated API calls, handle reference files, bootstrap customisations,
-  afterSave* plugins (classified into field/content = keep enabled,
-  deploy/notification = disable, unconfirmed = review), composer post-update-cmd.
+- `scripts/audit.py` — read-only audit (P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8,
+  P1.8b, P1.10b, P1.12, P1.13, P1.14): linkfield inventory, Super Table duplicate
+  handles, non-ST duplicate handles, URL→Link auto-promotion candidates, global
+  duplicate handles, deprecated API calls, handle reference files, bootstrap
+  customisations, afterSave* plugins (classified into field/content = keep enabled,
+  deploy/notification = disable, unconfirmed = review), composer post-update-cmd,
+  Redactor→CKEditor candidates.
+  - **Field inventory has two sources.** When `--mysql-cmd`/`--db-name` (from
+    P1.2) are passed, the `fields` DB table is **authoritative** and is
+    cross-checked against project config (`CONFIG/DB MISMATCH` is flagged); the
+    summary records `FIELD_INVENTORY_SOURCE: db`. Without them, a recursive
+    project-config parser is the offline fallback (`FIELD_INVENTORY_SOURCE:
+    config`, not authoritative). The config parser loads **both**
+    `superTableBlockTypes/` and `matrixBlockTypes/` external blocks and recurses
+    into nested block types (ST-inside-Matrix) — earlier versions missed Matrix
+    block fields, ST-in-Matrix, and block-type-nested URL/Redactor fields.
+  - `scripts/tests/` — fixture project + `test_audit.py`. Runs with no deps:
+    `python3 craft-5-preflight/scripts/tests/test_audit.py` (or under pytest).
 - `references/handle-remediation.md` — detailed guide for Block P2
   (duplicate handle renaming on Craft 4, the primary root-cause fix).
 

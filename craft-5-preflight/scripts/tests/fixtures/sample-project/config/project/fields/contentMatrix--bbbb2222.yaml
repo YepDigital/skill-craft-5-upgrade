@@ -1,0 +1,6 @@
+handle: contentMatrix
+name: Content Matrix
+type: craft\fields\Matrix
+settings:
+  minBlocks: null
+  maxBlocks: null

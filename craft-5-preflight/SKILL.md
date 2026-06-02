@@ -91,17 +91,26 @@ php craft queue/info
 ```
 Flag any pending or reserved jobs as a blocker.
 
-### P1.7 / P1.7a / P1.7b / P1.7c / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 / P1.14 Audit script
-Run from the project root:
+### P1.7 / P1.7a / P1.7b / P1.7c / P1.7d / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 / P1.14 Audit script
+Run from the project root, passing the `MYSQL_CMD` and `DB_NAME` recorded in P1.2:
 ```bash
-python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py
+python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py \
+    --mysql-cmd "$MYSQL_CMD" --db-name "$DB_NAME"
 ```
 
+**Always pass the DB args.** With them, the `fields` table is the **authoritative**
+source for the field inventory and duplicate-handle checks (immune to project-config
+structural drift across Craft/plugin versions), and the audit cross-checks it
+against project config and flags any discrepancy. The bare no-arg form still runs
+offline (config-only) as a fallback — but its counts are not authoritative; use it
+only when the DB is unreachable.
+
 This covers all areas in one pass:
-- **P1.7** — Linkfield field inventory (handle, name, enabled types, columnSuffix) — parsed correctly per field block, not by regex
+- **P1.7** — Linkfield field inventory (handle, name, enabled types, columnSuffix). Includes a CONFIG/DB cross-check when DB args are supplied.
 - **P1.7a** — Super Table duplicate field handles (reads both inline `blockTypes:` and `config/project/superTableBlockTypes/`)
 - **P1.7b** — Duplicate linkfield handles across non-ST contexts (top-level, matrix)
 - **P1.7c** — `craft\fields\Url` fields that Craft 5 will auto-promote to `craft\fields\Link`
+- **P1.7d** — **Global** duplicate handles across ALL fields and contexts (the superset of P1.7a/P1.7b — what Craft 5 actually deduplicates on)
 - **P1.8** — Deprecated API calls and `.with([` calls in templates
 - **P1.8b** — All template files referencing any linkfield handle (for the L3 patcher file list)
 - **P1.10b** — Non-standard customisations in `bootstrap.php` / `web/index.php`
@@ -115,9 +124,12 @@ Read the output and record all findings. The script prints a state file summary 
 List every duplicate Super Table sub-field handle found. These are remediated
 in Block P2.
 
-The audit reads both the inline `blockTypes:` key on each ST field YAML
-**and** the separate `config/project/superTableBlockTypes/` directory used by
-newer Super Table releases. The two guard states are distinct:
+The config-parser path reads inline `blockTypes:` keys **and** the external
+`config/project/superTableBlockTypes/` **and** `config/project/matrixBlockTypes/`
+directories, and recurses into nested block types (e.g. a Super Table field
+inside a Matrix block) so sub-fields are resolved at any depth. When DB args are
+supplied, the `fields` table supersedes all of this and is authoritative. The two
+guard states are distinct:
 
 - **"No Super Table fields found"** — no YAML in `config/project/fields/` has
   `type: verbb\supertable\fields\SuperTableField`. ST is not installed or not
@@ -141,6 +153,27 @@ top-level field AND in a Matrix block sub-field) also trigger the same
 `getAllFields()` collision. These cannot be remediated by P2 (which targets
 ST sub-fields only) — document them in `NON_ST_DUPLICATE_HANDLES` and warn
 the user to verify the L2 `_v2` field count after migration.
+
+**After running — P1.7d note (global duplicate handles):**
+P1.7d is the **superset** of P1.7a and P1.7b — it groups every field across all
+contexts, which is what Craft 5 actually deduplicates on. It splits results:
+
+- **RISKY** — a linkfield shares the handle across contexts. Real
+  `getAllFields()` data-loss risk; remediate in Block P2 (ST sub-fields) or
+  record under `NON_ST_DUPLICATE_HANDLES` (top-level/matrix). Record all of these
+  under `GLOBAL_DUPLICATE_HANDLES` in the state file.
+- **Informational** — native-type duplicates only (e.g. `heading`×8 PlainText).
+  Craft 5 auto-suffixes these (`handle` → `handle2`); content-safe, no
+  pre-upgrade action required. Note them so post-upgrade renames are expected.
+
+**After running — CONFIG/DB cross-check:**
+When DB args were supplied, `FIELD_INVENTORY_SOURCE: db` and a
+`P1.7 CONFIG/DB FIELD INVENTORY CROSS-CHECK` section appears. If it reports
+`CONFIG/DB MISMATCH`, the DB figures are authoritative — the listed fields are
+ones a config-only run would under-report. An empty cross-check confirms the
+inventory is complete. If you see `FIELD_INVENTORY_SOURCE: config`, the DB was
+not reachable; the counts are best-effort — fix the connection (P1.2) and re-run
+before trusting any "none found".
 
 **After running — P1.7c note:**
 `URL_PROMOTION_CANDIDATES` lists every `craft\fields\Url` field in the project.
@@ -360,6 +393,9 @@ LINKFIELD_PRESENT: yes|no
 MYSQL_CMD: <e.g. "mysql -h 127.0.0.1 -u root">
 DB_NAME: <database name>
 DB_CHARSET_EXISTING: <existing CRAFT_DB_CHARSET value, or "(none)">
+FIELD_INVENTORY_SOURCE: db|config
+<!-- "db" = fields table, authoritative (DB args passed). "config" = offline -->
+<!-- fallback, NOT authoritative — re-run with --mysql-cmd/--db-name. -->
 
 ## Linkfield inventory
 <!-- One row per linkfield field. Empty section if LINKFIELD_PRESENT=no. -->
@@ -378,6 +414,14 @@ DB_CHARSET_EXISTING: <existing CRAFT_DB_CHARSET value, or "(none)">
 <!-- Verify _v2 field count matches source count in craft-5-linkfield Block L2. -->
 NON_ST_DUPLICATE_HANDLES:
   - handle: <name>, contexts: [<top-level / matrix:BlockType, ...>]
+
+## Global duplicate handles (P1.7d)
+<!-- Superset of the two above. RISKY = a linkfield shares the handle (data-loss -->
+<!-- risk; remediate in P2 / NON_ST_DUPLICATE_HANDLES). Informational = native -->
+<!-- types Craft 5 auto-suffixes (content-safe). Empty if none. -->
+GLOBAL_DUPLICATE_HANDLES:
+  - handle: <name>  # RISKY (linkfield) — <contexts>
+  - handle: <name>  # informational (native, content-safe)
 
 ## URL field promotion candidates
 <!-- craft\fields\Url fields Craft 5 auto-promotes to craft\fields\Link on php craft up. -->
