@@ -37,7 +37,9 @@ findings, and wait for explicit confirmation before proceeding.**
 
 **Rollback:** restore DB backup, run
 `git checkout composer.json composer.lock && composer install`,
-then `git checkout .` to revert file changes.
+then `git checkout .` to revert file changes. The craft-utils vendor patch
+(U2.1.5) is in `vendor/` (git-ignored) — it is reverted automatically by
+`composer install` and removed permanently when linkfield is removed in L4.1.
 
 ---
 
@@ -54,14 +56,22 @@ Read `.craft5-upgrade.md`. Record:
   stay enabled throughout the upgrade)
 - `PLUGINS_FOR_MANUAL_REVIEW` (may be empty)
 - `COMPOSER_POST_UPDATE_HOOK` (yes/no)
+- `LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK` (yes/no — from preflight P1.15;
+  predictive only, the craft-utils patch in U2.1.5 runs unconditionally for
+  linkfield projects)
+- `NONSTRINGABLE_FORMIE_FIELDS` (list of offending Formie fields, if any)
 - Plugin target versions from PLUGIN_TARGETS table
 - Any blockers (must be none)
 
 Confirm `PHASE: preflight-done`. If not, stop and instruct as above.
 
-**If `COMPOSER_POST_UPDATE_HOOK: yes`:** note this now. In U2.1, `composer update`
-will automatically run `php craft up` via the `post-update-cmd` hook. U2.2 will
-be a no-op (or will confirm "already up to date"). Do not be surprised by this.
+**If `COMPOSER_POST_UPDATE_HOOK: yes` and `LINKFIELD_PRESENT: yes`:** note this
+now. In U2.1, `composer update` would automatically run `php craft up` via the
+`post-update-cmd` hook — but the craft-utils vendor patch (U2.1.5) must be
+applied *between* `composer update` and `php craft up`. The skill therefore
+**temporarily removes** the `@craft-update` hook from `composer.json` before
+`composer update`, applies the patch, then runs `php craft up` explicitly (U2.2)
+and restores the hook. See U2.1 for the exact steps.
 
 ### U1.1 Confirm backup and version control
 Ask the user to confirm:
@@ -224,6 +234,19 @@ or `php craft up` has been run yet. Wait for confirmation before Block U2.**
 ## BLOCK U2 — Craft 5 upgrade
 
 ### U2.1 Run composer update
+
+**Pre-step — neutralise post-update-cmd hook (linkfield projects only):**
+If `LINKFIELD_PRESENT: yes` AND `COMPOSER_POST_UPDATE_HOOK: yes`, temporarily
+remove the `@craft-update` entry from `post-update-cmd` in `composer.json` before
+running `composer update`. This prevents the hook from auto-running `php craft up`
+before the craft-utils vendor patch (U2.1.5) can be applied.
+
+Edit `composer.json` and remove the `@craft-update` entry from the
+`post-update-cmd` array (or the key entirely if it is the only entry). Record
+the original value — it is restored after `php craft up` succeeds in U2.2.
+
+If `LINKFIELD_PRESENT: no` OR `COMPOSER_POST_UPDATE_HOOK: no`, skip this pre-step.
+
 ```bash
 composer update --no-interaction
 ```
@@ -231,17 +254,49 @@ Do not add `--with-all-dependencies` or package-specific flags.
 If `LINKFIELD_PRESENT` is "yes": confirm both `craftcms/cms` (^5.x) and
 `sebastianlenz/linkfield` (3.0.0-beta) appear in the output.
 
-**If `COMPOSER_POST_UPDATE_HOOK: yes` (from state file):** `composer update`
-will automatically run `php craft up` via the `post-update-cmd` hook. U2.2
-below will likely be a no-op that confirms "already up to date." This is expected.
+### U2.1.5 Pre-patch craft-utils (linkfield projects only)
+**Skip this step if `LINKFIELD_PRESENT` is "no".**
+
+`sebastianlenz/craft-utils` (installed with linkfield) has a bug in
+`ForeignFieldQueryListener::onBeforeQueryPrepare()` that fatals with
+*"Object of class … could not be converted to string"* when any non-stringable
+Formie field (`Heading`, `Html`, `Section`, `Summary`) shares an element type's
+field layouts with a linkfield — because `array_unique(SORT_STRING)` is called
+over all field objects before filtering to ForeignField instances. Formie
+migrations trigger this exact listener during `php craft up`.
+
+Apply the idempotent vendor patch now, **before** `php craft up`:
+```bash
+python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py --dry-run
+python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py
+python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py --check
+```
+The patch: removes the `array_unique()` wrapper, then deduplicates `ForeignField`
+instances by handle (O(n), matches downstream usage) — never stringifying
+arbitrary field objects.
+
+The `--check` exit code is the gate: **non-zero means the patch was not applied
+— do not proceed to U2.2 until it exits 0.** If the script exits with
+"structure changed" (non-zero error), the craft-utils source has changed since
+the patch was written; re-derive it from `references/craft-utils-formie-heading.md`
+before continuing.
+
+This is a **temporary vendor-file edit** — `craft-utils` is git-ignored and the
+patch disappears when `sebastianlenz/linkfield` is removed in `craft-5-linkfield`
+Block L4.1. If any `composer install` or `composer update` reinstalls `craft-utils`
+before that removal, re-run the patcher. See
+`references/craft-utils-formie-heading.md` for root cause and rationale.
 
 ### U2.2 Run the Craft database upgrade
 ```bash
 php craft up
 php craft project-config/apply
 ```
-If `COMPOSER_POST_UPDATE_HOOK: yes`, this command will likely output "already
-up to date" — that is correct behaviour, not a failure.
+
+**After a successful `php craft up`** — if the `@craft-update` hook was
+neutralised in U2.1, restore it now: re-add the `@craft-update` entry to
+`post-update-cmd` in `composer.json` (restoring the original value recorded in
+U2.1). This ensures production deploy behaviour is unchanged.
 
 **Note:** `php craft --version` is not a valid Craft CLI command and will exit
 with code 1. Do not treat that as a failure. Use `composer show craftcms/cms`
@@ -299,6 +354,31 @@ upgrade — **stop and roll back to the U1.1 snapshot**; do not "fix" it by re-e
 content migration has already been skipped against now-dropped source tables.
 
 If anything renders empty or as `MissingField`, do not commit. Report and roll back.
+
+### U2.7 If `php craft up` failed mid-migration
+
+If `php craft up` failed with *"Object of class … could not be converted to
+string"* from `ForeignFieldQueryListener.php`, the craft-utils patch was not
+applied before running it (or was lost to a composer reinstall). Apply the patch
+(U2.1.5) and re-run `php craft up`.
+
+**Beware of orphaned tables.** Craft auto-restores its pre-run backup on failure,
+but tables created by migrations that ran *before* the failure are not in that
+backup — they are left behind (orphaned). Repeated failed runs accumulate orphans
+(e.g. `ckeditor_references`, `auth_oauth_tokens`, `contentblocks`,
+`elements_owners`, …). Attempting to re-run with orphans present produces a
+second-order error: `Table 'ckeditor_references' already exists`.
+
+**Do not drop orphaned tables one-by-one.** The set is non-deterministic. Instead,
+restore the **auto-backup taken at the start of the *first* failed `php craft up`
+attempt** — it is post-preflight-prep but pre-Craft-5-tables. See
+`references/craft-utils-formie-heading.md` for the deterministic identification
+procedure (compare `information_schema.tables` against the dump's `CREATE TABLE`
+statements) and the clean restore commands. A DROP+recreate of the DB schema is
+required (raw `mysql < dump` does not drop tables absent from the dump).
+
+After restoring the clean backup: ensure U2.1.5 has patched craft-utils
+(`--check` exits 0), then re-run `php craft up`.
 
 ---
 

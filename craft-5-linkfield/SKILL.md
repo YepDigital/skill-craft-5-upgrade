@@ -378,6 +378,13 @@ echo "yes" | php craft my-module/migrate-linkfield/run-direct --cleanup
 composer remove sebastianlenz/linkfield --no-interaction
 ```
 
+`composer remove sebastianlenz/linkfield` also removes `sebastianlenz/craft-utils`
+and with it the `ForeignFieldQueryListener` vendor patch applied in U2.1.5 — no
+separate cleanup is needed. Confirm that the contact form (or any Formie form
+containing a `Heading` field) still renders correctly after removal: native Link
+fields do not use the `craft-utils` query listener, so the Formie-Heading
+interaction is eliminated at the source.
+
 If `run-direct --cleanup` reports errors or fails to find old fields, try the
 fallback:
 ```bash

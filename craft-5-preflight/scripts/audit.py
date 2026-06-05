@@ -3,7 +3,7 @@
 Craft 5 preflight audit script — replaces audit.sh
 Run from the project root:
     python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py [project_root]
-Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8, P1.8b, P1.10b, P1.12, P1.13, P1.14
+Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8, P1.8b, P1.10b, P1.12, P1.13, P1.14, P1.15
 
 Field inventory source: the `fields` DB table is authoritative when --mysql-cmd
 and --db-name are supplied (it is cross-checked against project config and any
@@ -157,6 +157,12 @@ ST_TYPE = r'verbb\supertable\fields\SuperTableField'
 MT_TYPE = r'craft\fields\Matrix'
 URL_TYPE = r'craft\fields\Url'
 REDACTOR_TYPE = r'craft\redactor\Field'
+NONSTRINGABLE_FORMIE_TYPES = frozenset({
+    r'verbb\formie\fields\Heading',
+    r'verbb\formie\fields\Html',
+    r'verbb\formie\fields\Section',
+    r'verbb\formie\fields\Summary',
+})
 
 
 # ── YAML file discovery and field collection ──────────────────────────────────
@@ -918,6 +924,68 @@ def run_p114(redactor_fields, project_root):
     return redactor_fields
 
 
+# ── P1.15 – craft-utils non-stringable Formie field risk ──────────────────────
+
+def _collect_nonstringable_formie_fields(all_fields):
+    """Collect Formie field types that have no __toString().
+
+    ForeignFieldQueryListener.onBeforeQueryPrepare() (craft-utils) calls
+    array_unique(..., SORT_STRING) over ALL custom field objects in every queried
+    element type's field layouts — before filtering to its own ForeignField
+    instances. Formie Heading/Html/Section/Summary have no __toString(), so PHP
+    fatals when any of them share an element type layout with a linkfield.
+
+    Operates on the same all_fields shape both DB and config paths produce.
+    """
+    return [
+        f for f in all_fields
+        if f.get('type') in NONSTRINGABLE_FORMIE_TYPES and f.get('handle')
+    ]
+
+
+def run_p115(all_fields, project_root):
+    section('P1.15 LINKFIELD + craft-utils — non-stringable Formie field risk')
+    has_linkfield = _composer_has(project_root, 'sebastianlenz/linkfield')
+    has_formie = _composer_has(project_root, 'verbb/formie')
+    fields = _collect_nonstringable_formie_fields(all_fields)
+    risk = has_linkfield and has_formie and bool(fields)
+
+    if not has_linkfield:
+        info('sebastianlenz/linkfield not in composer.json — not applicable.')
+        return {'risk': False, 'fields': fields, 'has_linkfield': False, 'has_formie': has_formie}
+    if not has_formie:
+        info('verbb/formie not in composer.json — not applicable.')
+        return {'risk': False, 'fields': fields, 'has_linkfield': True, 'has_formie': False}
+    if not fields:
+        info('No non-stringable Formie fields found (Heading, Html, Section, Summary).')
+        info('LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK: no')
+        return {'risk': False, 'fields': fields, 'has_linkfield': True, 'has_formie': True}
+
+    warn('LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK: yes')
+    print()
+    warn('ForeignFieldQueryListener.onBeforeQueryPrepare() (craft-utils) calls')
+    warn('array_unique(..., SORT_STRING) over ALL custom field objects in every')
+    warn("queried element type's field layouts — before filtering to ForeignField.")
+    warn('Formie Heading/Html/Section/Summary have no __toString(), so PHP fatals:')
+    warn('  "Object of class ... could not be converted to string"')
+    warn('Formie migrations call Form::find()->all() during `php craft up`, triggering')
+    warn('this listener against Form layouts that contain the offending field.')
+    print()
+    warn('The craft-5-upgrade skill pre-patches craft-utils (U2.1.5) before running')
+    warn('`php craft up`, preventing this fatal unconditionally for linkfield projects.')
+    warn('This detection is predictive only — the patch runs regardless.')
+    print()
+    info('Offending fields:')
+    for f in fields:
+        tname = (f.get('type') or '?').rsplit('\\', 1)[-1]
+        ctx = f.get('context', 'top-level') or 'top-level'
+        parent = f.get('parent_handle', '') or ''
+        loc = '[top-level field]' if ctx == 'top-level' else f'[{ctx} sub-field: {parent}]'
+        found(f"handle: '{f['handle']}'  type: {tname}  {loc}")
+
+    return {'risk': risk, 'fields': fields, 'has_linkfield': True, 'has_formie': True}
+
+
 # ── P1.8 – Deprecated API calls and .with() ───────────────────────────────────
 
 DEPRECATED_PATTERNS = [
@@ -1524,6 +1592,7 @@ def main():
     has_redactor_pkg = _composer_has_redactor(project_root)
     has_ckeditor_pkg = _composer_has_ckeditor(project_root)
     redactor_fields = run_p114(redactor_fields, project_root) or redactor_fields
+    p115 = run_p115(all_fields, project_root)
 
     # ── State file summary ────────────────────────────────────────────────────
     print(f'\n{SEP}\n  STATE FILE SUMMARY — copy into .craft5-upgrade.md (Block P3)\n{SEP}')
@@ -1647,6 +1716,21 @@ def main():
 
     print()
     print(f'COMPOSER_POST_UPDATE_HOOK: {"yes" if has_post_update_hook else "no"}')
+
+    print()
+    print('## craft-utils Formie-Heading risk (P1.15)')
+    print('<!-- linkfield + verbb/formie + non-stringable Formie field (Heading/Html/Section/Summary). -->')
+    print('<!-- craft-utils ForeignFieldQueryListener.onBeforeQueryPrepare() calls array_unique() -->')
+    print('<!-- (SORT_STRING) over ALL field objects before filtering — fatals on non-stringable types. -->')
+    print('<!-- craft-5-upgrade pre-patches craft-utils unconditionally for linkfield projects (U2.1.5). -->')
+    print(f'LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK: {"yes" if p115.get("risk") else "no"}')
+    print('NONSTRINGABLE_FORMIE_FIELDS:')
+    if p115.get('fields'):
+        for f in p115['fields']:
+            tname = (f.get('type') or '?').rsplit('\\', 1)[-1]
+            print(f"  - {f['handle']} ({tname})")
+    else:
+        print('  (none)')
 
     print()
     print('## Redactor → CKEditor conversion')

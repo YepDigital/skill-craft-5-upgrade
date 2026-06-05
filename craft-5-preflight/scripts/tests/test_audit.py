@@ -108,16 +108,19 @@ def test_global_duplicate_handles():
 
 # ── DB-authoritative path (no live MySQL — _run_mysql is monkeypatched) ────────
 
+FORMIE_HEADING = r'verbb\formie\fields\Heading'
+
 _DB_FIELDS = [
-    ['1', 'u1', 'linkTo', 'Hero Link', 'global', LF, '{"columnSuffix":null}'],
-    ['2', 'u2', 'siteUrl', 'Site URL', 'global', URL, '{}'],
-    ['3', 'u3', 'linkTo', 'Link To', 'matrixBlockType:10', LF, '{}'],
-    ['4', 'u4', 'bodyText', 'Body Text', 'matrixBlockType:10', REDACTOR, '{}'],
-    ['5', 'u5', 'button', 'Button', 'superTableBlockType:20', LF, '{}'],
-    ['6', 'u6', 'profileUrl', 'Profile URL', 'superTableBlockType:20', URL, '{}'],
-    ['7', 'u7', 'heading', 'Heading', 'global', PLAIN, '{}'],
-    ['8', 'u8', 'heading', 'Heading', 'matrixBlockType:10', PLAIN, '{}'],
-    ['9', 'u9', 'buttons', 'Buttons', 'matrixBlockType:10', ST, '{}'],
+    ['1',  'u1',  'linkTo',       'Hero Link',    'global',              LF,             '{"columnSuffix":null}'],
+    ['2',  'u2',  'siteUrl',      'Site URL',     'global',              URL,            '{}'],
+    ['3',  'u3',  'linkTo',       'Link To',      'matrixBlockType:10',  LF,             '{}'],
+    ['4',  'u4',  'bodyText',     'Body Text',    'matrixBlockType:10',  REDACTOR,       '{}'],
+    ['5',  'u5',  'button',       'Button',       'superTableBlockType:20', LF,          '{}'],
+    ['6',  'u6',  'profileUrl',   'Profile URL',  'superTableBlockType:20', URL,         '{}'],
+    ['7',  'u7',  'heading',      'Heading',      'global',              PLAIN,          '{}'],
+    ['8',  'u8',  'heading',      'Heading',      'matrixBlockType:10',  PLAIN,          '{}'],
+    ['9',  'u9',  'buttons',      'Buttons',      'matrixBlockType:10',  ST,             '{}'],
+    ['10', 'u10', 'formieHead',   'Form Heading', 'global',              FORMIE_HEADING, '{}'],
 ]
 _DB_MATRIX_BT = [['10', 'Text Block', 'contentMatrix']]
 _DB_ST_BT = [['20', '', 'buttons']]
@@ -176,6 +179,55 @@ def test_mysql_unescape():
     assert audit._mysql_unescape(r'a\tb\nc') == 'a\tb\nc'
     assert audit._mysql_unescape(r'back\\slash') == 'back\\slash'
     assert audit._mysql_unescape('plain') == 'plain'
+
+
+# ── P1.15 — non-stringable Formie field detection ────────────────────────────
+
+def test_collect_nonstringable_formie_fields_config_path():
+    """Synthetic all_fields: Formie Heading found; native/LF fields not returned."""
+    fields = [
+        {'handle': 'heading', 'type': r'craft\fields\PlainText', 'context': 'top-level', 'parent_handle': ''},
+        {'handle': 'linkTo', 'type': r'lenz\linkfield\fields\LinkField', 'context': 'top-level', 'parent_handle': ''},
+        {'handle': 'formieHead', 'type': r'verbb\formie\fields\Heading', 'context': 'top-level', 'parent_handle': ''},
+        {'handle': 'formieSection', 'type': r'verbb\formie\fields\Section', 'context': 'matrix', 'parent_handle': 'form'},
+        # field with no handle — must be excluded
+        {'handle': '', 'type': r'verbb\formie\fields\Heading', 'context': 'top-level', 'parent_handle': ''},
+    ]
+    result = audit._collect_nonstringable_formie_fields(fields)
+    handles = {f['handle'] for f in result}
+    # Formie non-stringable fields with handles are returned
+    assert handles == {'formieHead', 'formieSection'}
+    # Native and linkfield types are excluded
+    assert 'heading' not in handles
+    assert 'linkTo' not in handles
+    # Empty-handle entry is excluded
+    assert '' not in handles
+
+
+def test_collect_nonstringable_formie_fields_all_types():
+    """All four non-stringable Formie types are captured."""
+    fields = [
+        {'handle': 'h', 'type': r'verbb\formie\fields\Heading',  'context': 'top-level', 'parent_handle': ''},
+        {'handle': 'ht', 'type': r'verbb\formie\fields\Html',    'context': 'top-level', 'parent_handle': ''},
+        {'handle': 's', 'type': r'verbb\formie\fields\Section',  'context': 'top-level', 'parent_handle': ''},
+        {'handle': 'sm', 'type': r'verbb\formie\fields\Summary', 'context': 'top-level', 'parent_handle': ''},
+    ]
+    result = audit._collect_nonstringable_formie_fields(fields)
+    assert {f['handle'] for f in result} == {'h', 'ht', 's', 'sm'}
+
+
+def test_db_inventory_includes_formie_heading():
+    """build_db_inventory returns Formie Heading in all_fields."""
+    inv = _db_inventory()
+    assert inv is not None
+    all_types = {f['type'] for f in inv['all_fields']}
+    assert FORMIE_HEADING in all_types
+    formie_fields = audit._collect_nonstringable_formie_fields(inv['all_fields'])
+    assert any(f['handle'] == 'formieHead' for f in formie_fields)
+    # Existing LF/URL/ST counts are unchanged
+    lf = {r['handle'] for r in inv['lf_records']}
+    assert lf == {'linkTo', 'button'}
+    assert inv['st_field_count'] == 1
 
 
 # ── Standalone runner (no pytest required) ────────────────────────────────────

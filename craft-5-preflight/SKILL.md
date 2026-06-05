@@ -91,7 +91,7 @@ php craft queue/info
 ```
 Flag any pending or reserved jobs as a blocker.
 
-### P1.7 / P1.7a / P1.7b / P1.7c / P1.7d / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 / P1.14 Audit script
+### P1.7 / P1.7a / P1.7b / P1.7c / P1.7d / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 / P1.14 / P1.15 Audit script
 Run from the project root, passing the `MYSQL_CMD` and `DB_NAME` recorded in P1.2:
 ```bash
 python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py \
@@ -117,6 +117,7 @@ This covers all areas in one pass:
 - **P1.12** — Vendor plugins with `afterSave*` event hooks, classified into field/content plugins (keep enabled), deploy/notification plugins (disable), and unconfirmed (review)
 - **P1.13** — `composer.json` `post-update-cmd` running `@craft-update`
 - **P1.14** — `craftcms/redactor` package + `craft\redactor\Field` field inventory (CKEditor conversion candidates)
+- **P1.15** — `sebastianlenz/linkfield` + `verbb/formie` + non-stringable Formie field risk (`Heading`/`Html`/`Section`/`Summary`). Emits `LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK: yes|no` and `NONSTRINGABLE_FORMIE_FIELDS`. The detection is predictive; `craft-5-upgrade` pre-patches unconditionally for all linkfield projects (U2.1.5).
 
 Read the output and record all findings. The script prints a state file summary at the end — use it directly in Block P3.
 
@@ -229,6 +230,22 @@ registration (keep enabled) and for env-specific deploy signals (safe to disable
 
 The audit resolves vendor libraries to their host plugin's handle via `composer.json`
 under `vendor/`, so handles can be passed directly to `php craft plugin/disable`.
+
+**After running — P1.15 note:**
+`LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK` is `yes` when all three are true:
+`sebastianlenz/linkfield` present, `verbb/formie` present, and at least one
+non-stringable Formie field (`Heading`, `Html`, `Section`, `Summary`) is in the
+field inventory. When true, `php craft up` will fatal mid-migration unless the
+`craft-utils` vendor file is patched first (the `ForeignFieldQueryListener` calls
+`array_unique(SORT_STRING)` over all field objects before filtering, and these
+Formie types have no `__toString()`).
+
+This detection is predictive only — it cannot enumerate every possible
+non-stringable field type. `craft-5-upgrade` pre-patches `craft-utils`
+**unconditionally** for all linkfield projects in step U2.1.5, so the fatal is
+prevented regardless of whether the risk flag is set. Record the flag and the
+`NONSTRINGABLE_FORMIE_FIELDS` list in the state file; the upgrade skill echoes
+them in its pre-patch report.
 
 **After running — P1.14 note:**
 `REDACTOR_PACKAGE_PRESENT` and `REDACTOR_FIELDS` flag use of the abandoned
@@ -477,7 +494,17 @@ PLUGINS_FOR_MANUAL_REVIEW:
 
 ## Composer hook
 COMPOSER_POST_UPDATE_HOOK: yes|no
-<!-- If yes: U2.1 (composer update) automatically runs php craft up; U2.2 is a no-op. -->
+<!-- If yes: U2.1 (composer update) automatically runs php craft up via the hook; -->
+<!-- craft-5-upgrade will neutralise the hook before composer update so php craft up -->
+<!-- is a separate, patchable step, then restore it after a successful run. -->
+
+## craft-utils Formie-Heading risk (P1.15)
+<!-- linkfield + verbb/formie + non-stringable Formie field (Heading/Html/Section/Summary). -->
+<!-- craft-5-upgrade pre-patches craft-utils unconditionally for linkfield projects (U2.1.5). -->
+<!-- This flag is predictive only; the patch runs regardless of its value. -->
+LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK: yes|no
+NONSTRINGABLE_FORMIE_FIELDS:
+  - <handle> (<Heading|Html|Section|Summary>)   # or (none)
 
 ## Composer audit overrides
 <!-- Populated in craft-5-upgrade U1.5.5 after adding block-insecure: false. -->

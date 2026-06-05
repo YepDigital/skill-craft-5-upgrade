@@ -50,12 +50,14 @@ Each skill:
 
 ### craft-5-preflight
 - `scripts/audit.py` — read-only audit (P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8,
-  P1.8b, P1.10b, P1.12, P1.13, P1.14): linkfield inventory, Super Table duplicate
-  handles, non-ST duplicate handles, URL→Link auto-promotion candidates, global
-  duplicate handles, deprecated API calls, handle reference files, bootstrap
+  P1.8b, P1.10b, P1.12, P1.13, P1.14, P1.15): linkfield inventory, Super Table
+  duplicate handles, non-ST duplicate handles, URL→Link auto-promotion candidates,
+  global duplicate handles, deprecated API calls, handle reference files, bootstrap
   customisations, afterSave* plugins (classified into field/content = keep enabled,
   deploy/notification = disable, unconfirmed = review), composer post-update-cmd,
-  Redactor→CKEditor candidates.
+  Redactor→CKEditor candidates, linkfield + Formie non-stringable-field risk
+  (P1.15 — emits `LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK` and
+  `NONSTRINGABLE_FORMIE_FIELDS`).
   - **Field inventory has two sources.** When `--mysql-cmd`/`--db-name` (from
     P1.2) are passed, the `fields` DB table is **authoritative** and is
     cross-checked against project config (`CONFIG/DB MISMATCH` is flagged); the
@@ -77,6 +79,12 @@ Each skill:
   `console/controllers/MigrateLinkfieldController.php` is the migration command
   (`run-direct` is the primary path; `run` is the fallback).
 - `references/module-setup.md` — Block U1.3 instructions for copying the module.
+- `scripts/patch-craft-utils.py` — idempotent patcher for the craft-utils
+  `ForeignFieldQueryListener` `array_unique` / Formie-Heading fatal. Applied in
+  U2.1.5 before `php craft up` for all linkfield projects (`--dry-run`/`--check`
+  supported; sentinel-guarded; `php -l` gated; exits non-zero if structure changed).
+- `references/craft-utils-formie-heading.md` — root cause, patch rationale,
+  durability notes, and orphaned-table recovery procedure (for U2.7).
 
 ### craft-5-linkfield
 - `scripts/patch-templates.py` — Block L3 template patcher. Hardcoded API
@@ -129,6 +137,19 @@ These decisions were researched and recorded to avoid rediscovery. See
 - **`stimmt/craft-mcp` — optional post-upgrade verification aid.** Craft 5-only,
   dev-only, install transiently, remove after sign-off. Not a skill dependency.
   See `craft-5-linkfield/references/post-upgrade-verification.md`.
+
+- **craft-utils `array_unique` / Formie-Heading fatal (craft-utils postmortem).**
+  Hit in 2/11 real upgrades. `ForeignFieldQueryListener::onBeforeQueryPrepare()`
+  calls `array_unique(SORT_STRING)` over all field objects before filtering to
+  `ForeignField` instances; Formie `Heading`/`Html`/`Section`/`Summary` have no
+  `__toString()` and fatal. Detection is in P1.15 (`LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK`),
+  but the patch runs **unconditionally** for all linkfield projects in U2.1.5
+  (detection is predictive only). When `COMPOSER_POST_UPDATE_HOOK: yes`, the
+  `@craft-update` hook is neutralised before `composer update` so the patch can
+  land first — prevents orphaned-table accumulation from repeated failed runs.
+  Patch is a temporary vendor edit; disappears when linkfield is removed in L4.1.
+  Recovery for already-failed runs: deterministic clean-backup restore (see U2.7
+  and `craft-5-upgrade/references/craft-utils-formie-heading.md`).
 
 - **Never disable field/content plugins for the upgrade (Hyper postmortem).**
   Field plugins (Hyper, Super Table, CKEditor, Redactor, Formie, linkfield, and
