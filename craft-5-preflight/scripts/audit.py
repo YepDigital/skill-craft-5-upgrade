@@ -1156,8 +1156,11 @@ def run_p18b(templates_dir, lf_records, deprecated_files, with_files):
 
 def run_p1_bootstrap(project_root):
     section('P1.10b BOOTSTRAP / ENTRYPOINT CUSTOMISATIONS')
+    # Webroot is conventionally 'public' on these projects (never the Craft
+    # default 'web'). Check 'public' first, fall back to 'web' for robustness.
     files_to_check = [
         project_root / 'bootstrap.php',
+        project_root / 'public' / 'index.php',
         project_root / 'web' / 'index.php',
     ]
     patterns = [
@@ -1191,7 +1194,7 @@ def run_p1_bootstrap(project_root):
                 found(f'[{label}] line {lineno}: {line.strip()}')
 
     if not any_found:
-        info('No non-standard customisations detected in bootstrap.php / web/index.php.')
+        info('No non-standard customisations detected in bootstrap.php / public/index.php.')
     else:
         print()
         warn('Record these in BOOTSTRAP_CUSTOMISATIONS in the state file.')

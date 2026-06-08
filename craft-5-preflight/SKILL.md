@@ -113,7 +113,7 @@ This covers all areas in one pass:
 - **P1.7d** — **Global** duplicate handles across ALL fields and contexts (the superset of P1.7a/P1.7b — what Craft 5 actually deduplicates on)
 - **P1.8** — Deprecated API calls and `.with([` calls in templates
 - **P1.8b** — All template files referencing any linkfield handle (for the L3 patcher file list)
-- **P1.10b** — Non-standard customisations in `bootstrap.php` / `web/index.php`
+- **P1.10b** — Non-standard customisations in `bootstrap.php` / `public/index.php` (webroot is `public`, not the Craft default `web`)
 - **P1.12** — Vendor plugins with `afterSave*` event hooks, classified into field/content plugins (keep enabled), deploy/notification plugins (disable), and unconfirmed (review)
 - **P1.13** — `composer.json` `post-update-cmd` running `@craft-update`
 - **P1.14** — `craftcms/redactor` package + `craft\redactor\Field` field inventory (CKEditor conversion candidates)
@@ -283,8 +283,10 @@ fields and the short follow-up: `php craft ckeditor/convert/redactor`, then
 Search `templates/` for directories containing both a `.twig` and `.html` file
 with the same base name. List any found.
 
-### P1.10 `web/index.php` and `craft` executable
-Check for any customisations beyond standard Craft boilerplate.
+### P1.10 `public/index.php` and `craft` executable
+The webroot is `public` on these projects — not the Craft default `web`.
+Check `public/index.php` (fall back to `web/index.php` only if `public` is absent)
+for any customisations beyond standard Craft boilerplate.
 Note bootstrap constants or custom logic.
 
 ### P1.11 Temp Uploads Location
