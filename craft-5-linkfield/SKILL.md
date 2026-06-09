@@ -96,8 +96,11 @@ and `run`):
 
 | Typed Link Field type | Outcome |
 |---|---|
-| `tel` | Skipped. Re-enter manually as a URL link using a `tel:+...` prefix. |
-| `user` | Skipped. No native Craft 5 equivalent. |
+| `user` | Skipped. No native Craft 5 equivalent. Re-enter manually. |
+
+**`tel` rows are fully migrated.** The migrator maps `tel` to the native
+`phone` link type (and enables `phone` on the `_v2` field when the source
+allowed `tel`). Do not flag tel rows as a data loss risk.
 
 **`asset` rows are fully migrated by `run-direct`.** The asset element ID is
 stored in `linkedId` and written as `{"type": "asset", "value": "{asset:ID@1:url}"}`.
@@ -145,7 +148,7 @@ Block P2, the `_v2` mapping should be strictly 1:1.
 
 Confirm via:
 ```bash
-<MYSQL_CMD> <DB_NAME> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%_v2' ORDER BY handle;"
+<MYSQL_CMD> <DB_NAME> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%\_v2' ORDER BY handle;"
 ```
 (Substitute `MYSQL_CMD` and `DB_NAME` from the state file. Adjust the
 `craft_` prefix to match your `CRAFT_DB_TABLE_PREFIX` — empty prefix means
@@ -188,7 +191,7 @@ JOIN JSON_TABLE(fl.config, '$.tabs[*].elements[*]' COLUMNS (
   element_uid VARCHAR(36) PATH '$.uid',
   field_uid   VARCHAR(36) PATH '$.fieldUid'
 )) AS je ON je.field_uid = f.uid
-WHERE f.handle LIKE '%_v2';
+WHERE f.handle LIKE '%\_v2';
 ```
 
 ### L2.3 Reconcile state file from current DB
@@ -290,14 +293,16 @@ If any remain (see L2.2), resolve them first.
 
 ### L3.2 Patch templates — automated
 
-Run the patcher in dry-run mode first, review the diffs, then apply:
+Run the patcher in dry-run mode first, review the diffs, then apply. The script
+is `scripts/patch-templates.py` in **this skill's directory** (substitute the
+actual skill directory path for `<skill_dir>`):
 ```bash
-python3 ~/.claude/skills/craft-5-linkfield/scripts/patch-templates.py \
+python3 <skill_dir>/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
   --files <HANDLE_REFERENCE_FILES from state file> \
   --dry-run
 
-python3 ~/.claude/skills/craft-5-linkfield/scripts/patch-templates.py \
+python3 <skill_dir>/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2","navLink":"navLink_v2"}' \
   --files <HANDLE_REFERENCE_FILES from state file>
 ```
@@ -338,10 +343,10 @@ List every file modified with a summary of changes; show diffs for non-trivial
 files.
 
 ### L3.5 Post-patch bare-reference sweep
-After patching, run the patcher in `--verify` mode to confirm no old handles
-remain in templates:
+After patching, run the patcher in `--verify` mode (read-only — it never
+writes) to confirm no old handles remain in templates:
 ```bash
-python3 ~/.claude/skills/craft-5-linkfield/scripts/patch-templates.py \
+python3 <skill_dir>/scripts/patch-templates.py \
   --handles '{"primaryLink":"primaryLink_v2",...}' \
   --files <all HANDLE_REFERENCE_FILES from state file> \
   --verify
@@ -489,7 +494,7 @@ Produce a structured summary:
   - Any `columnSuffix` fields — confirm data verified in CP
   - Super Table single-row access patterns needing `.one()`
   - `user` link type rows skipped (no native equivalent; re-enter manually)
-  - `tel` link type rows skipped (re-enter as URL links using `tel:+...` prefix)
+  - (`tel` rows are migrated to the native `phone` link type — no manual action)
   - (`asset` rows are migrated automatically by `run-direct` — no manual action)
   - Any `_v2` fields not yet visible in entry type layouts — add via CP
     (if `run-direct` was used and layout insertion was not possible)
@@ -554,7 +559,6 @@ php craft plugin/enable <handle>
 - [ ] Open an entry using field `[first _v2 handle]` in the CP — confirm link renders
 - [ ] Re-enter content for link rows skipped during migration:
   - `user` link type rows: [count or "none"] (no native equivalent)
-  - `tel` link type rows: [count or "none"] (re-enter as URL with `tel:+...` prefix)
 - [ ] Template extension collisions from preflight P1.9: [list, or "none"]
 - [ ] `columnSuffix` fields — verify data in CP: [list, or "none"]
 - [ ] Super Table single-row access patterns now needing `.one()`: [list, or "none"]

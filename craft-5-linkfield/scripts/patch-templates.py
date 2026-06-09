@@ -7,7 +7,8 @@ and project-specific handle renames to a list of template files.
 Modes:
   (default)    Patch files in place.
   --dry-run    Print diffs without writing files.
-  --verify     Exit non-zero if any old handle reference remains after patching.
+  --verify     Read-only: exit non-zero if any old handle reference would
+               remain after patching. Never writes files.
   --lint-only  Flag Twig 2→3 syntax patterns that break under Twig 3 (no writes).
 
 Usage:
@@ -58,10 +59,15 @@ API_SUBSTITUTIONS = [
     ('.getUrl()',        '.url'),
     ('.getCustomText()', '.label'),
     ('.getTarget()',     '.target'),
-    ('.getType',        '.type'),
     ('.getElement()',    '.element'),
+    # .getType is handled by _GETTYPE_PATTERN below — a plain substring
+    # replace would corrupt longer identifiers (.getTypeId → .typeId).
     # getLinkAttributes() is handled separately (see apply_linkattributes)
 ]
+
+# Matches `.getType()` and bare property-style `.getType`, but NOT longer
+# identifiers (`.getTypeId`) or calls with arguments (`.getType(x)`).
+_GETTYPE_PATTERN = re.compile(r'\.getType(?:\(\)|\b(?!\())')
 
 # Inline replacement for .getLinkAttributes() — avoids requiring a macro file.
 # Replaces `<expr>.getLinkAttributes()` with the href + target attributes.
@@ -80,7 +86,7 @@ _LINKATTR_INLINE_PATTERN = re.compile(
 def apply_api_substitutions(content):
     for old, new in API_SUBSTITUTIONS:
         content = content.replace(old, new)
-    return content
+    return _GETTYPE_PATTERN.sub('.type', content)
 
 
 def apply_linkattributes(content, mode='inline'):
@@ -109,6 +115,19 @@ def apply_linkattributes(content, mode='inline'):
             print('  [NOTE] Add {% import "_macros/linkField.twig" as linkField %} where needed.')
         return content
     return content
+
+
+def validate_handles(handles):
+    """Return the {old: new} entries that are NOT suffix-style.
+
+    apply_handle_renames and verify_no_old_handles both derive the suffix as
+    new[len(old):], so every mapping must satisfy new = old + suffix. A rename
+    like navLink → mainNavLink would produce a garbage lookahead pattern.
+    """
+    return {
+        old: new for old, new in handles.items()
+        if not (isinstance(new, str) and new.startswith(old) and new != old)
+    }
 
 
 def apply_handle_renames(content, handles):
@@ -254,7 +273,7 @@ def verify_no_old_handles(path, content, handles):
 def patch_file(path, handles, dry_run=False, null_guards=False,
                lint_only=False, verify=False, linkattributes_mode='inline'):
     try:
-        original = open(path, encoding='utf-8').read()
+        original = open(path, encoding='utf-8', errors='replace').read()
     except FileNotFoundError:
         print(f'  [ERROR] File not found: {path}')
         return False, 0
@@ -267,6 +286,20 @@ def patch_file(path, handles, dry_run=False, null_guards=False,
             print(f'  [clean] {path}')
         return True, lint_issues
 
+    if verify and handles:
+        # Verify is read-only: flag files still containing bare old-handle
+        # references in their CURRENT content (i.e. files the patcher missed).
+        # Checking transformed content would always pass — the rename and the
+        # verify use the same pattern. The operator re-runs the patcher on any
+        # flagged file; nothing is written here.
+        remaining = verify_no_old_handles(path, original, handles)
+        if remaining:
+            for lineno, handle, line in remaining:
+                print(f'  [REMAINING] {path}:{lineno}: .{handle} still present')
+                print(f'              {line}')
+            return False, 0
+        return True, 0
+
     content = original
     content = apply_api_substitutions(content)
     content = apply_linkattributes(content, mode=linkattributes_mode)
@@ -274,14 +307,6 @@ def patch_file(path, handles, dry_run=False, null_guards=False,
     content = remove_with_calls(content, handles)
     if null_guards and handles:
         content = apply_null_guards(content, handles)
-
-    if verify and handles:
-        remaining = verify_no_old_handles(path, content, handles)
-        if remaining:
-            for lineno, handle, line in remaining:
-                print(f'  [REMAINING] {path}:{lineno}: .{handle} still present')
-                print(f'              {line}')
-            return False, 0
 
     if content == original:
         print(f'  [unchanged] {path}')
@@ -339,6 +364,13 @@ def main():
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f'[ERROR] Could not load handles file: {e}')
             sys.exit(1)
+
+    bad = validate_handles(handles)
+    if bad:
+        print('[ERROR] Handle mappings must be suffix-style (newHandle = oldHandle + suffix):')
+        for old, new in bad.items():
+            print(f'  {old} → {new}')
+        sys.exit(1)
 
     if args.lint_only:
         print('[LINT-ONLY — checking Twig 2→3 syntax patterns, no files written]\n')

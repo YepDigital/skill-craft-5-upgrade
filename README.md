@@ -38,6 +38,10 @@ No extra installation steps needed — cloning to `~/.claude/skills/craft-5-upgr
 is sufficient. Skills trigger via their `description` frontmatter or explicit
 `/craft-5-preflight` etc. invocation.
 
+SKILL.md commands reference support scripts as `<skill_dir>/scripts/...` —
+substitute the skill's actual directory at runtime. This works for both the
+nested layout above and per-skill symlinks into `~/.claude/skills/`.
+
 ## State file
 
 `craft-5-preflight` writes `.craft5-upgrade.md` to the target project root.

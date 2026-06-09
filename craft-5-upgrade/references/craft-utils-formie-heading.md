@@ -133,8 +133,9 @@ only until `linkfield` + `craft-utils` are removed in `craft-5-linkfield` Block 
 
 - **Skill behaviour:** `patch-craft-utils.py` is idempotent (sentinel-guarded),
   so it is safe to run again after any composer reinstall of `craft-utils`.
-- **If composer reinstalls craft-utils before L4:** re-run the patcher:
-  `python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py`
+- **If composer reinstalls craft-utils before L4:** re-run the patcher
+  (`scripts/patch-craft-utils.py` in the craft-5-upgrade skill directory):
+  `python3 <skill_dir>/scripts/patch-craft-utils.py`
 - **Removal:** when `composer remove sebastianlenz/linkfield` runs in L4.1,
   `craft-utils` is also removed and the patched vendor file disappears with it.
   No separate cleanup needed.

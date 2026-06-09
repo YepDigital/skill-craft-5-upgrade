@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Craft 5 preflight audit script — replaces audit.sh
-Run from the project root:
-    python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py [project_root]
-Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8, P1.8b, P1.10b, P1.12, P1.13, P1.14, P1.15
+Run from the project root (path is this skill's scripts/ directory):
+    python3 <skill_dir>/scripts/audit.py [project_root]
+Covers SKILL.md blocks P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8, P1.8b, P1.9, P1.10b, P1.12, P1.13, P1.14, P1.15
 
 Field inventory source: the `fields` DB table is authoritative when --mysql-cmd
 and --db-name are supplied (it is cross-checked against project config and any
@@ -158,10 +158,17 @@ MT_TYPE = r'craft\fields\Matrix'
 URL_TYPE = r'craft\fields\Url'
 REDACTOR_TYPE = r'craft\redactor\Field'
 NONSTRINGABLE_FORMIE_TYPES = frozenset({
+    # Formie 3 (Craft 5) namespace
     r'verbb\formie\fields\Heading',
     r'verbb\formie\fields\Html',
     r'verbb\formie\fields\Section',
     r'verbb\formie\fields\Summary',
+    # Formie 2 (Craft 4) namespace — what the preflight DB/config actually
+    # contains, since the audit runs before the upgrade.
+    r'verbb\formie\fields\formfields\Heading',
+    r'verbb\formie\fields\formfields\Html',
+    r'verbb\formie\fields\formfields\Section',
+    r'verbb\formie\fields\formfields\Summary',
 })
 
 
@@ -413,7 +420,7 @@ def _run_mysql(mysql_cmd, db_name, sql):
     return rows
 
 
-def _db_block_type_parents(mysql_cmd, db_name, table):
+def _db_block_type_parents(mysql_cmd, db_name, table, prefix=''):
     """Map block-type id → (parent field handle, block type name) for a table.
 
     matrixblocktypes has a name column; supertableblocktypes does not.
@@ -422,7 +429,7 @@ def _db_block_type_parents(mysql_cmd, db_name, table):
     cols = 'bt.id, ' + ('bt.name' if has_name else "''") + ', f.handle'
     rows = _run_mysql(
         mysql_cmd, db_name,
-        f'SELECT {cols} FROM {table} bt JOIN fields f ON f.id = bt.fieldId'
+        f'SELECT {cols} FROM {prefix}{table} bt JOIN {prefix}fields f ON f.id = bt.fieldId'
     )
     result = {}
     for row in (rows or []):
@@ -431,24 +438,46 @@ def _db_block_type_parents(mysql_cmd, db_name, table):
     return result
 
 
-def build_db_inventory(mysql_cmd, db_name, config_index=None):
+def _detect_table_prefix(mysql_cmd, db_name):
+    """Detect a CRAFT_DB_TABLE_PREFIX (e.g. 'craft_') by probing table names.
+
+    Returns the prefix string, or None if no prefixed fields table is found.
+    Candidates are validated by checking that '{prefix}elements' also exists.
+    """
+    rows = _run_mysql(mysql_cmd, db_name, "SHOW TABLES LIKE '%fields'")
+    candidates = sorted(
+        {r[0][:-len('fields')] for r in (rows or []) if r and r[0].endswith('fields')},
+        key=len,
+    )
+    for prefix in candidates:
+        if not prefix:
+            continue  # bare `fields` — the unprefixed query already failed
+        if _run_mysql(mysql_cmd, db_name, f"SHOW TABLES LIKE '{prefix}elements'"):
+            return prefix
+    return None
+
+
+def build_db_inventory(mysql_cmd, db_name, config_index=None, table_prefix=''):
     """Build the authoritative field inventory from the DB.
 
     Returns a dict with the same record shapes collect_all_fields produces
     (lf_records, st_sub_handles, st_field_count, all_fields), or None if the
     DB is unreachable / the query fails. config_index (optional) maps
     (handle, context, parent_handle) → filepath for best-effort enrichment.
+    table_prefix is the CRAFT_DB_TABLE_PREFIX value ('' on most Craft 4 sites,
+    'craft_' on Craft 3 carry-overs).
     """
     rows = _run_mysql(
         mysql_cmd, db_name,
         "SELECT id, COALESCE(uid,''), COALESCE(handle,''), COALESCE(name,''), "
-        "COALESCE(context,''), COALESCE(type,''), COALESCE(settings,'') FROM fields"
+        "COALESCE(context,''), COALESCE(type,''), COALESCE(settings,'') "
+        f"FROM {table_prefix}fields"
     )
     if rows is None:
         return None
 
-    mbt = _db_block_type_parents(mysql_cmd, db_name, 'matrixblocktypes')
-    sbt = _db_block_type_parents(mysql_cmd, db_name, 'supertableblocktypes')
+    mbt = _db_block_type_parents(mysql_cmd, db_name, 'matrixblocktypes', table_prefix)
+    sbt = _db_block_type_parents(mysql_cmd, db_name, 'supertableblocktypes', table_prefix)
     config_index = config_index or {}
 
     lf_records, st_sub_handles, all_fields = [], [], []
@@ -736,7 +765,29 @@ def _collect_url_fields(all_fields):
     return url_fields
 
 
-def _find_url_breaking_patterns(templates_dir, handle):
+def load_templates(templates_dir):
+    """Read every .twig/.html file under templates_dir ONCE.
+
+    Returns {filepath: text}. All template scanners (P1.7c, P1.8, P1.8b, P1.9)
+    consume this cache so the template tree is walked and read a single time
+    per audit run instead of once per pattern/handle.
+    """
+    cache = {}
+    if not templates_dir.is_dir():
+        return cache
+    for root, _, files in os.walk(str(templates_dir)):
+        for fname in sorted(files):
+            if not (fname.endswith('.twig') or fname.endswith('.html')):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                cache[fpath] = open(fpath, encoding='utf-8', errors='replace').read()
+            except (OSError, IOError):
+                pass
+    return cache
+
+
+def _find_url_breaking_patterns(tpl_cache, handle):
     """
     Scan templates for uses of a URL field handle that break when Craft 5
     auto-promotes it from craft\\fields\\Url to craft\\fields\\Link.
@@ -747,36 +798,25 @@ def _find_url_breaking_patterns(templates_dir, handle):
     """
     breaking_hits = []
     all_ref_files = set()
-    if not templates_dir.is_dir():
-        return breaking_hits, all_ref_files
 
     length_re = re.compile(re.escape(handle) + r'\s*\|length')
     in_test_re = re.compile(r'\bin\s+\S*' + re.escape(handle) + r'\b')
 
-    for root, _, files in os.walk(str(templates_dir)):
-        for fname in sorted(files):
-            if not (fname.endswith('.twig') or fname.endswith('.html')):
+    for fpath in sorted(tpl_cache):
+        for lineno, line in enumerate(tpl_cache[fpath].splitlines(), 1):
+            if handle not in line:
                 continue
-            fpath = os.path.join(root, fname)
-            try:
-                for lineno, line in enumerate(
-                    open(fpath, encoding='utf-8', errors='replace'), 1
-                ):
-                    if handle not in line:
-                        continue
-                    stripped = line.rstrip()
-                    all_ref_files.add(fpath)
-                    if length_re.search(line):
-                        breaking_hits.append((fpath, lineno, stripped, '|length'))
-                    elif in_test_re.search(line):
-                        breaking_hits.append((fpath, lineno, stripped, 'in-test'))
-            except (OSError, IOError):
-                pass
+            stripped = line.rstrip()
+            all_ref_files.add(fpath)
+            if length_re.search(line):
+                breaking_hits.append((fpath, lineno, stripped, '|length'))
+            elif in_test_re.search(line):
+                breaking_hits.append((fpath, lineno, stripped, 'in-test'))
 
     return breaking_hits, all_ref_files
 
 
-def run_p17c(url_fields, templates_dir):
+def run_p17c(url_fields, tpl_cache):
     section(r'P1.7c URL FIELDS — CANDIDATES FOR Craft 5 AUTO-PROMOTION TO craft\fields\Link')
     if not url_fields:
         info(r'No craft\fields\Url fields found in project config.')
@@ -791,7 +831,7 @@ def run_p17c(url_fields, templates_dir):
         handle = field['handle']
         if not handle:
             continue
-        breaking, ref_files = _find_url_breaking_patterns(templates_dir, handle)
+        breaking, ref_files = _find_url_breaking_patterns(tpl_cache, handle)
         field['breaking_refs'] = breaking
         field['all_ref_files'] = ref_files
 
@@ -999,35 +1039,32 @@ DEPRECATED_PATTERNS = [
 ]
 
 
-def _grep_templates(templates_dir, pattern, fixed=True):
-    results = []
-    for root, _, files in os.walk(str(templates_dir)):
-        for fname in sorted(files):
-            if not (fname.endswith('.twig') or fname.endswith('.html')):
-                continue
-            fpath = os.path.join(root, fname)
-            try:
-                for lineno, line in enumerate(
-                    open(fpath, encoding='utf-8', errors='replace'), 1
-                ):
-                    hit = (pattern in line) if fixed else bool(re.search(pattern, line))
-                    if hit:
-                        results.append((fpath, lineno, line.rstrip()))
-            except (OSError, IOError):
-                pass
+def _grep_cache(tpl_cache, patterns):
+    """One pass over the template cache for a list of fixed-string patterns.
+
+    Returns {pattern: [(fpath, lineno, line), ...]}.
+    """
+    results = {p: [] for p in patterns}
+    for fpath in sorted(tpl_cache):
+        for lineno, line in enumerate(tpl_cache[fpath].splitlines(), 1):
+            for pattern in patterns:
+                if pattern in line:
+                    results[pattern].append((fpath, lineno, line.rstrip()))
     return results
 
 
-def run_p18(templates_dir):
+def run_p18(templates_dir, tpl_cache):
     section('P1.8 TEMPLATE DEPRECATED API CALLS')
     if not templates_dir.is_dir():
         warn(f'{templates_dir} not found — skipping')
         return set(), set()
 
+    hits_by_pattern = _grep_cache(tpl_cache, DEPRECATED_PATTERNS + ['.with(['])
+
     deprecated_files = set()
     any_found = False
     for pattern in DEPRECATED_PATTERNS:
-        hits = _grep_templates(templates_dir, pattern)
+        hits = hits_by_pattern[pattern]
         if hits:
             any_found = True
             print()
@@ -1040,7 +1077,7 @@ def run_p18(templates_dir):
 
     section('P1.8 TEMPLATE .with() CALLS (check for linkfield handles)')
     with_files = set()
-    hits = _grep_templates(templates_dir, '.with([')
+    hits = hits_by_pattern['.with([']
     if hits:
         info('Cross-reference these against linkfield handles from P1.7.')
         info('Any .with() call on a migrated handle must be removed in craft-5-linkfield Block L3.')
@@ -1056,7 +1093,7 @@ def run_p18(templates_dir):
 
 # ── P1.8b – Handle reference files ───────────────────────────────────────────
 
-def run_p18b(templates_dir, lf_records, deprecated_files, with_files):
+def run_p18b(templates_dir, tpl_cache, lf_records, deprecated_files, with_files):
     section('P1.8b HANDLE REFERENCE FILES (for L3 patcher file list)')
     if not templates_dir.is_dir() or not lf_records:
         none_found()
@@ -1112,24 +1149,17 @@ def run_p18b(templates_dir, lf_records, deprecated_files, with_files):
                         handle_ref_files[str(p)].add(h)
                     return
 
-    for root, _, files in os.walk(str(templates_dir)):
-        for fname in sorted(files):
-            if not (fname.endswith('.twig') or fname.endswith('.html')):
-                continue
-            fpath = os.path.join(root, fname)
-            try:
-                text = open(fpath, encoding='utf-8', errors='replace').read()
-                for m in pat.finditer(text):
-                    handle_ref_files[fpath].add(m.group(1))
-                # Cross-file: if this file binds a handle into an include's
-                # argument dict, the included target also needs L3 patching.
-                for im in include_pat.finditer(text):
-                    target, arg_dict = im.group(1), im.group(2)
-                    handles_in_args = {hm.group(1) for hm in pat.finditer(arg_dict)}
-                    if handles_in_args:
-                        add_include_target(root, target, handles_in_args)
-            except (OSError, IOError):
-                pass
+    for fpath in sorted(tpl_cache):
+        text = tpl_cache[fpath]
+        for m in pat.finditer(text):
+            handle_ref_files[fpath].add(m.group(1))
+        # Cross-file: if this file binds a handle into an include's
+        # argument dict, the included target also needs L3 patching.
+        for im in include_pat.finditer(text):
+            target, arg_dict = im.group(1), im.group(2)
+            handles_in_args = {hm.group(1) for hm in pat.finditer(arg_dict)}
+            if handles_in_args:
+                add_include_target(os.path.dirname(fpath), target, handles_in_args)
 
     all_files = set(handle_ref_files) | deprecated_files | with_files
 
@@ -1150,6 +1180,35 @@ def run_p18b(templates_dir, lf_records, deprecated_files, with_files):
         none_found()
 
     return all_files
+
+
+# ── P1.9 – Template extension collisions ─────────────────────────────────────
+
+def run_p19(tpl_cache):
+    """Report base names that exist as BOTH .twig and .html in templates/.
+
+    Only one of the pair is served (per Craft's template-extension resolution
+    order) — the other is dead weight and a post-upgrade confusion source.
+    """
+    section('P1.9 TEMPLATE EXTENSION COLLISIONS (.twig + .html, same base name)')
+    exts_by_base = defaultdict(set)
+    for fpath in tpl_cache:
+        base, ext = os.path.splitext(fpath)
+        exts_by_base[base].add(ext)
+
+    collisions = sorted(
+        base for base, exts in exts_by_base.items() if {'.twig', '.html'} <= exts
+    )
+    if not collisions:
+        info('No .twig/.html base-name collisions found.')
+        return collisions
+
+    for base in collisions:
+        found(f'{base}.twig  +  {base}.html')
+    print()
+    warn('Only one file of each pair is served — confirm which is live and')
+    warn('remove or rename the other. Record collisions in the state file Notes.')
+    return collisions
 
 
 # ── P1.10b – Bootstrap / entrypoint customisations ───────────────────────────
@@ -1534,6 +1593,11 @@ def main():
         '--db-name', default=None,
         help='Database name (DB_NAME from P1.2). Required for the DB inventory path.'
     )
+    parser.add_argument(
+        '--table-prefix', default=None,
+        help="CRAFT_DB_TABLE_PREFIX value (e.g. 'craft_'). Auto-detected when "
+             'omitted and the bare `fields` table is not found.'
+    )
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve()
@@ -1556,12 +1620,25 @@ def main():
     inventory_source = 'config'
     db_inv = None
     if args.mysql_cmd and args.db_name:
+        cfg_index = _config_filepath_index(cfg_all)
         db_inv = build_db_inventory(
-            args.mysql_cmd, args.db_name, _config_filepath_index(cfg_all)
+            args.mysql_cmd, args.db_name, cfg_index, args.table_prefix or ''
         )
+        if db_inv is None and args.table_prefix is None:
+            # The bare `fields` query failed — the project may use a
+            # CRAFT_DB_TABLE_PREFIX (e.g. 'craft_'). Probe for it before
+            # giving up on the authoritative DB path.
+            detected = _detect_table_prefix(args.mysql_cmd, args.db_name)
+            if detected:
+                print(f"\n[INFO] Bare `fields` table not found — detected table "
+                      f"prefix '{detected}'. Using it for the DB inventory.")
+                db_inv = build_db_inventory(
+                    args.mysql_cmd, args.db_name, cfg_index, detected
+                )
         if db_inv is None:
             print('\n[WARN] --mysql-cmd/--db-name supplied but the fields query failed '
-                  '(unreachable DB or auth error). Falling back to project config.')
+                  '(unreachable DB, auth error, or unrecognised table prefix — '
+                  'try --table-prefix). Falling back to project config.')
 
     if db_inv is not None:
         inventory_source = 'db'
@@ -1575,6 +1652,7 @@ def main():
 
     url_fields = _collect_url_fields(all_fields)
     redactor_fields = _collect_redactor_fields(all_fields)
+    tpl_cache = load_templates(templates_dir)
 
     # ── Run all sections ──────────────────────────────────────────────────────
     if db_inv is not None:
@@ -1583,9 +1661,10 @@ def main():
     run_p17a(st_sub_handles, st_field_count)
     run_p17b(lf_records)
     p17d = run_p17d(all_fields)
-    url_fields = run_p17c(url_fields, templates_dir) or url_fields
-    deprecated_files, with_files = run_p18(templates_dir)
-    all_template_files = run_p18b(templates_dir, lf_records, deprecated_files, with_files)
+    url_fields = run_p17c(url_fields, tpl_cache) or url_fields
+    deprecated_files, with_files = run_p18(templates_dir, tpl_cache)
+    all_template_files = run_p18b(templates_dir, tpl_cache, lf_records, deprecated_files, with_files)
+    extension_collisions = run_p19(tpl_cache)
     run_p1_bootstrap(project_root)
     p112 = run_p112(project_root)
     plugins_to_disable = p112['disable']
@@ -1673,6 +1752,11 @@ def main():
     print('HANDLE_REFERENCE_FILES:')
     for f in sorted(all_template_files): print(f'  - {f}')
     if not all_template_files: print('  (none)')
+
+    print()
+    print('TEMPLATE_EXTENSION_COLLISIONS:')
+    for base in extension_collisions: print(f'  - {base} (.twig + .html)')
+    if not extension_collisions: print('  (none)')
 
     print()
     print('PLUGINS_TO_DISABLE_FOR_UPGRADE:')

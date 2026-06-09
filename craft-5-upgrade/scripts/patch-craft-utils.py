@@ -13,10 +13,10 @@ __toString(), so PHP throws:
 The patch: filter to ForeignField first, then dedup by handle (O(n), matches
 downstream usage) — never stringifying arbitrary field objects.
 
-Usage (run from the target project root):
-    python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py
-    python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py --dry-run
-    python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py --check
+Usage (run from the target project root; path is this skill's scripts/ directory):
+    python3 <skill_dir>/scripts/patch-craft-utils.py
+    python3 <skill_dir>/scripts/patch-craft-utils.py --dry-run
+    python3 <skill_dir>/scripts/patch-craft-utils.py --check
 
 This is a TEMPORARY vendor-file edit.  The patch disappears automatically when
 sebastianlenz/linkfield (and craft-utils) is removed in craft-5-linkfield L4.1.
@@ -120,13 +120,9 @@ def _apply_patch(original):
     # Remove the array_unique() wrapper: replace array_unique(<inner>) with <inner>
     patched = original[:au_re.start()] + inner_content + original[au_close + 1:]
 
-    # Now locate the $fields assignment statement end (semicolon after the
-    # array_filter(...) that now directly wraps array_reduce(...)).
-    # Find the $fields = ... ; statement that contains our just-spliced content.
-    # We search for the first ';' that follows the splice point in the patched text.
-    splice_pos = original.index('array_unique(')  # position in original → same offset works
-    # In patched text the splice happened at the same offset (au_re.start()).
-    # Find the ';' that ends the $fields = array_filter(...) statement.
+    # Now locate the $fields assignment statement end: the first ';' after the
+    # splice point (the splice happened at au_re.start() in the patched text),
+    # which closes the $fields = array_filter(...) statement.
     stmt_end = patched.find(';', au_re.start())
     if stmt_end < 0:
         raise ValueError(
@@ -164,8 +160,14 @@ def main():
 
     if not target.exists():
         if args.check:
-            # Not installed = patch not needed — treat as patched for gate purposes.
-            sys.exit(0)
+            # --check gates `php craft up` in U2.1.5, which only runs for
+            # linkfield projects AFTER composer update — at that point the
+            # file must exist. A missing target means a wrong project root or
+            # a failed install; failing the gate is the safe answer.
+            print(f'NOT PATCHED — craft-utils not found at {target}', file=sys.stderr)
+            print('(wrong project root, or composer install/update has not run?)',
+                  file=sys.stderr)
+            sys.exit(1)
         print('craft-utils not installed — nothing to patch.')
         sys.exit(0)
 

@@ -91,10 +91,12 @@ php craft queue/info
 ```
 Flag any pending or reserved jobs as a blocker.
 
-### P1.7 / P1.7a / P1.7b / P1.7c / P1.7d / P1.8 / P1.8b / P1.10b / P1.12 / P1.13 / P1.14 / P1.15 Audit script
-Run from the project root, passing the `MYSQL_CMD` and `DB_NAME` recorded in P1.2:
+### P1.7 / P1.7a / P1.7b / P1.7c / P1.7d / P1.8 / P1.8b / P1.9 / P1.10b / P1.12 / P1.13 / P1.14 / P1.15 Audit script
+Run `scripts/audit.py` from **this skill's directory** against the project root,
+passing the `MYSQL_CMD` and `DB_NAME` recorded in P1.2 (substitute the actual
+skill directory path for `<skill_dir>`):
 ```bash
-python3 ~/.claude/skills/craft-5-preflight/scripts/audit.py \
+python3 <skill_dir>/scripts/audit.py \
     --mysql-cmd "$MYSQL_CMD" --db-name "$DB_NAME"
 ```
 
@@ -105,6 +107,12 @@ against project config and flags any discrepancy. The bare no-arg form still run
 offline (config-only) as a fallback — but its counts are not authoritative; use it
 only when the DB is unreachable.
 
+If the project uses a `CRAFT_DB_TABLE_PREFIX` (e.g. `craft_`), the script
+auto-detects it when the bare `fields` table is missing; `--table-prefix` forces
+a specific value. A `[WARN] … falling back to project config` despite valid DB
+args means neither the bare nor a detected prefixed `fields` table was readable
+— fix that before trusting the inventory.
+
 This covers all areas in one pass:
 - **P1.7** — Linkfield field inventory (handle, name, enabled types, columnSuffix). Includes a CONFIG/DB cross-check when DB args are supplied.
 - **P1.7a** — Super Table duplicate field handles (reads both inline `blockTypes:` and `config/project/superTableBlockTypes/`)
@@ -113,6 +121,7 @@ This covers all areas in one pass:
 - **P1.7d** — **Global** duplicate handles across ALL fields and contexts (the superset of P1.7a/P1.7b — what Craft 5 actually deduplicates on)
 - **P1.8** — Deprecated API calls and `.with([` calls in templates
 - **P1.8b** — All template files referencing any linkfield handle (for the L3 patcher file list)
+- **P1.9** — Template extension collisions (`.twig` + `.html` with the same base name)
 - **P1.10b** — Non-standard customisations in `bootstrap.php` / `public/index.php` (webroot is `public`, not the Craft default `web`)
 - **P1.12** — Vendor plugins with `afterSave*` event hooks, classified into field/content plugins (keep enabled), deploy/notification plugins (disable), and unconfirmed (review)
 - **P1.13** — `composer.json` `post-update-cmd` running `@craft-update`
@@ -280,8 +289,10 @@ fields and the short follow-up: `php craft ckeditor/convert/redactor`, then
 `composer remove craftcms/redactor` once no Redactor fields remain.
 
 ### P1.9 Template extension collisions
-Search `templates/` for directories containing both a `.twig` and `.html` file
-with the same base name. List any found.
+Covered by the audit script (its `P1.9 TEMPLATE EXTENSION COLLISIONS` section
+and the `TEMPLATE_EXTENSION_COLLISIONS` summary key). Review any collisions it
+reports — only one file of each `.twig`/`.html` pair is served — and record
+them in the state file.
 
 ### P1.10 `public/index.php` and `craft` executable
 The webroot is `public` on these projects — not the Craft default `web`.
@@ -464,6 +475,10 @@ WITH_CALL_FILES:
 HANDLE_REFERENCE_FILES:
   - <file path>
 
+TEMPLATE_EXTENSION_COLLISIONS:
+<!-- From P1.9. Same base name as both .twig and .html — only one is served. -->
+  - <base path> (.twig + .html)   # or (none)
+
 ## Bootstrap customisations
 <!-- From P1.10b. Note anything that suppresses errors or changes PHP behaviour. -->
 BOOTSTRAP_CUSTOMISATIONS:
@@ -507,6 +522,15 @@ COMPOSER_POST_UPDATE_HOOK: yes|no
 LINKFIELD_CRAFTUTILS_FORMIE_HEADING_RISK: yes|no
 NONSTRINGABLE_FORMIE_FIELDS:
   - <handle> (<Heading|Html|Section|Summary>)   # or (none)
+
+## Redactor → CKEditor conversion (P1.14)
+<!-- craftcms/redactor is abandoned — convert to craftcms/ckeditor. -->
+<!-- Recommended on Craft 4 before the upgrade (see P1.14 note); fallback -->
+<!-- post-upgrade in craft-5-upgrade U3.3 / craft-5-linkfield L4.4. -->
+REDACTOR_PACKAGE_PRESENT: yes|no
+CKEDITOR_PACKAGE_PRESENT: yes|no
+REDACTOR_FIELDS:
+  - handle: <handle> ('<field name>')   # or (none)
 
 ## Composer audit overrides
 <!-- Populated in craft-5-upgrade U1.5.5 after adding block-insecure: false. -->

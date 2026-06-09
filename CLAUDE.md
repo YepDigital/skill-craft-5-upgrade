@@ -15,8 +15,12 @@ frontmatter that controls trigger accuracy).
 
 ## Skill suite
 
-Each skill is a subdirectory with its own `SKILL.md`. Install by symlinking
-or copying each directory into `~/.claude/skills/`:
+Each skill is a subdirectory with its own `SKILL.md`. The repo lives at
+`~/.claude/skills/craft-5-upgrade/` and Claude Code discovers the nested skill
+directories automatically; per-skill symlinks into `~/.claude/skills/` also
+work. SKILL.md commands therefore reference support scripts relative to the
+skill's own directory (`<skill_dir>/scripts/...`) — never as absolute
+`~/.claude/skills/<skill-name>/` paths, which only resolve in one layout.
 
 ```
 craft-5-preflight/   Audit + Craft-4 duplicate-handle remediation
@@ -50,7 +54,7 @@ Each skill:
 
 ### craft-5-preflight
 - `scripts/audit.py` — read-only audit (P1.7, P1.7a, P1.7b, P1.7c, P1.7d, P1.8,
-  P1.8b, P1.10b, P1.12, P1.13, P1.14, P1.15): linkfield inventory, Super Table
+  P1.8b, P1.9, P1.10b, P1.12, P1.13, P1.14, P1.15): linkfield inventory, Super Table
   duplicate handles, non-ST duplicate handles, URL→Link auto-promotion candidates,
   global duplicate handles, deprecated API calls, handle reference files, bootstrap
   customisations, afterSave* plugins (classified into field/content = keep enabled,
@@ -61,7 +65,8 @@ Each skill:
   - **Field inventory has two sources.** When `--mysql-cmd`/`--db-name` (from
     P1.2) are passed, the `fields` DB table is **authoritative** and is
     cross-checked against project config (`CONFIG/DB MISMATCH` is flagged); the
-    summary records `FIELD_INVENTORY_SOURCE: db`. Without them, a recursive
+    summary records `FIELD_INVENTORY_SOURCE: db`. A `CRAFT_DB_TABLE_PREFIX`
+    is auto-detected (or forced with `--table-prefix`). Without them, a recursive
     project-config parser is the offline fallback (`FIELD_INVENTORY_SOURCE:
     config`, not authoritative). The config parser loads **both**
     `superTableBlockTypes/` and `matrixBlockTypes/` external blocks and recurses
@@ -85,11 +90,16 @@ Each skill:
   supported; sentinel-guarded; `php -l` gated; exits non-zero if structure changed).
 - `references/craft-utils-formie-heading.md` — root cause, patch rationale,
   durability notes, and orphaned-table recovery procedure (for U2.7).
+- `scripts/tests/test_patch_craft_utils.py` — fixture-based patcher tests
+  (no deps): `python3 craft-5-upgrade/scripts/tests/test_patch_craft_utils.py`.
 
 ### craft-5-linkfield
 - `scripts/patch-templates.py` — Block L3 template patcher. Hardcoded API
   substitutions plus project-specific handle renames via `--handles` JSON.
-  `--dry-run` prints diffs without writing.
+  `--dry-run` prints diffs without writing; `--verify` is read-only and checks
+  the files' current content for remaining old-handle references.
+- `scripts/tests/test_patch_templates.py` — tests for every transform
+  (no deps): `python3 craft-5-linkfield/scripts/tests/test_patch_templates.py`.
 - `references/template-migration.md` — API map, null-safety patterns, Super
   Table `.one()` patterns, and the template editing approach.
 

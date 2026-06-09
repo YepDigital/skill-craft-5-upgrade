@@ -1,0 +1,5 @@
+{# Fixture: references the linkfield handle and a URL-field breaking pattern. #}
+{% if entry.siteUrl|length %}
+  <a href="{{ entry.siteUrl }}">Site</a>
+{% endif %}
+{{ entry.linkTo.getUrl() }}

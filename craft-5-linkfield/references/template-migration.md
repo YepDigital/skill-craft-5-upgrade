@@ -37,7 +37,7 @@ preflight), resolve them by field `name` before patching templates.
 prefix means bare `fields`.)
 
 ```bash
-<MYSQL_CMD> <DB_NAME> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%_v2' ORDER BY handle;"
+<MYSQL_CMD> <DB_NAME> -e "SELECT handle, name FROM craft_fields WHERE handle LIKE '%\_v2' ORDER BY handle;"
 ```
 
 A field's `name` (e.g. "Utility Navigation - Link") identifies its template

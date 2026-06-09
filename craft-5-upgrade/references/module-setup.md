@@ -1,6 +1,6 @@
 # Migration Module Setup
 
-Read this file when executing Block 2.3 (Install the migration module).
+Read this file when executing Block U1.3 (Install the migration module).
 
 ---
 

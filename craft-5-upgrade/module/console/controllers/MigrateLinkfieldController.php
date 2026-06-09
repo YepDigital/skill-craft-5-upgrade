@@ -648,7 +648,7 @@ class MigrateLinkfieldController extends Controller
                 $mapped = $this->mapDbRow($row);
 
                 if ($mapped === null) {
-                    $skipReasons['unmappable_type']++;
+                    $skipReasons[$this->rowSkipReason($row)]++;
                     continue;
                 }
 
@@ -781,7 +781,7 @@ class MigrateLinkfieldController extends Controller
             try {
                 $mapped = $this->mapDbRow($row);
                 if ($mapped === null) {
-                    $skipReasons['unmappable_type']++;
+                    $skipReasons[$this->rowSkipReason($row)]++;
                     continue;
                 }
 
@@ -827,9 +827,25 @@ class MigrateLinkfieldController extends Controller
             'softdeleted'     => 0,
             'no_element'      => 0,
             'unmappable_type' => 0,
+            'empty_value'     => 0,
             'save_failed'     => 0,
             'error'           => 0,
         ];
+    }
+
+    /**
+     * Classify why mapDbRow() returned null for a row: a link type with no
+     * native equivalent ('unmappable_type'), or a mappable type whose value
+     * column is empty ('empty_value'). Keeps the per-type skip counts honest
+     * for the L1.3 report.
+     */
+    private function rowSkipReason(array $row): string
+    {
+        $type = $row['type'] ?? null;
+        if (!$type || $this->mapTypeName($type) === null) {
+            return 'unmappable_type';
+        }
+        return 'empty_value';
     }
 
     /**

@@ -143,7 +143,7 @@ Check whether `modules/Module.php` already exists in the project.
   whether `modules/console/controllers/MigrateLinkfieldController.php` exists.
   If both exist, skip to U1.4.
 - If not: follow `references/module-setup.md` in this skill's directory to
-  copy the module files from `~/.claude/skills/craft-5-upgrade/module/`,
+  copy the module files from this skill's `module/` directory,
   register the module in `config/app.php`, and confirm the PSR-4 autoload
   entry in `composer.json`. Do not run `composer update` yet.
 
@@ -265,11 +265,13 @@ field layouts with a linkfield — because `array_unique(SORT_STRING)` is called
 over all field objects before filtering to ForeignField instances. Formie
 migrations trigger this exact listener during `php craft up`.
 
-Apply the idempotent vendor patch now, **before** `php craft up`:
+Apply the idempotent vendor patch now, **before** `php craft up`. The script is
+`scripts/patch-craft-utils.py` in **this skill's directory** (substitute the
+actual skill directory path for `<skill_dir>`); run it from the project root:
 ```bash
-python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py --dry-run
-python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py
-python3 ~/.claude/skills/craft-5-upgrade/scripts/patch-craft-utils.py --check
+python3 <skill_dir>/scripts/patch-craft-utils.py --dry-run
+python3 <skill_dir>/scripts/patch-craft-utils.py
+python3 <skill_dir>/scripts/patch-craft-utils.py --check
 ```
 The patch: removes the `array_unique()` wrapper, then deduplicates `ForeignField`
 instances by handle (O(n), matches downstream usage) — never stringifying
