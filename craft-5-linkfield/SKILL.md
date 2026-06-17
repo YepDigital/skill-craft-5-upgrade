@@ -62,6 +62,15 @@ reporting, so the dry-run shows a complete picture:
 php craft my-module/migrate-linkfield/run-direct --dry-run
 ```
 
+**`--dry-run` is not fully read-only.** It **creates** the `_v2` field
+definitions and inserts them into field layouts before reporting — only the
+*element content* is left unwritten ("[Dry-run mode] No changes written" refers
+to content only). Because field/layout structure changes even in dry-run, take
+the pre-migration DB backup **before** this step, not between L1 and L2:
+```bash
+php craft db/backup   # rollback point for the whole migration
+```
+
 **Fallback:** If `run-direct --dry-run` reports no fields at all (fields table
 has no rows with type `lenz\linkfield\fields\LinkField`), try the standard path:
 ```bash
@@ -141,6 +150,20 @@ Report the full output including the summary table
 (field | rows migrated | rows skipped | status).
 Stop if any field reports ERROR status. Report any skipped rows and their reason.
 
+**Live "Migrated" counts exceed the dry-run estimate — this is expected.** The
+dry-run counts current elements only; the live run also processes **revision**
+elements, so live counts can run 2–3× the dry-run figure (e.g. `button` 65 → 176)
+while other rows are reported `no_element` skips. Nothing is wrong — current
+content migrates faithfully; the extra rows are revision history.
+
+**Skip-reason taxonomy (all content-safe — do not investigate as data loss):**
+
+| Reason | Meaning |
+|---|---|
+| `empty_value` | Row has no URL and no linked element (nothing to migrate). |
+| `unmappable_type` | In practice, rows with a blank/NULL `type` and zero data (cleared links) — not exotic link types. |
+| `no_element` | The owning element won't load: revision/draft-owned or soft-deleted. Predominantly revision elements. |
+
 ### L2.2 Handle mapping confirmation
 
 Because duplicate handles were remediated on Craft 4 in `craft-5-preflight`
@@ -181,6 +204,17 @@ FROM craft_elements_sites
 WHERE content->>'$."<element_uid>"' IS NOT NULL
 LIMIT 5;
 ```
+
+**"v2 content only on revisions" is a real, faithful-migration pattern.** If a
+field's `_v2` content appears only on *revision* elements and the canonical
+entry looks empty, do not assume the migration missed it. Check the canonical's
+source rows first: an editor who cleared the link pre-upgrade leaves the old
+value only in revision history, so an empty canonical source is correct.
+```sql
+-- Source rows for the canonical element (adjust prefix; substitute the element id):
+SELECT * FROM craft_lenz_linkfield WHERE elementId = <canonical_element_id>;
+```
+Empty source rows ⇒ faithful migration, not a miss.
 
 If `run-direct` did not print UIDs (older run), use this query to build the map:
 ```sql
@@ -307,6 +341,17 @@ python3 <skill_dir>/scripts/patch-templates.py \
   --files <HANDLE_REFERENCE_FILES from state file>
 ```
 
+**Passing a long file list under zsh:** an *unquoted shell variable* holding a
+space-separated list is **not** word-split by zsh — the whole list arrives as one
+filename and the patcher errors `File not found: <entire list>`. Use command
+substitution (which zsh does split) or xargs, both shell-agnostic:
+```bash
+# one file per line in files.txt, then:
+python3 <skill_dir>/scripts/patch-templates.py --handles '{...}' --files $(cat files.txt)
+# or:
+xargs python3 <skill_dir>/scripts/patch-templates.py --handles '{...}' --files < files.txt
+```
+
 The script applies:
 - API method substitutions (`.getUrl()` → `.url`, `.getCustomText()` → `.label`,
   `.getTarget()` → `.target`, `.getType` → `.type`, `.getElement()` → `.element`)
@@ -382,6 +427,11 @@ fail because the constraint can no longer resolve without beta stability.
 echo "yes" | php craft my-module/migrate-linkfield/run-direct --cleanup
 composer remove sebastianlenz/linkfield --no-interaction
 ```
+
+**Note:** `composer remove` rewrites the lock file, so if
+`COMPOSER_POST_UPDATE_HOOK: yes` it fires `post-update-cmd` (i.e. runs
+`php craft up`) after the package is gone. This is normally a harmless no-op at
+this stage — Craft 5 is already migrated — but be aware the hook runs here.
 
 `composer remove sebastianlenz/linkfield` also removes `sebastianlenz/craft-utils`
 and with it the `ForeignFieldQueryListener` vendor patch applied in U2.1.5 — no
@@ -494,6 +544,9 @@ Produce a structured summary:
   - Any `columnSuffix` fields — confirm data verified in CP
   - Super Table single-row access patterns needing `.one()`
   - `user` link type rows skipped (no native equivalent; re-enter manually)
+  - **Revisions lose link history:** revision elements are skipped by the
+    migrator, so reverting an entry to a pre-upgrade revision restores an
+    **empty** link field. Set this expectation (and note it in deploy notes).
   - (`tel` rows are migrated to the native `phone` link type — no manual action)
   - (`asset` rows are migrated automatically by `run-direct` — no manual action)
   - Any `_v2` fields not yet visible in entry type layouts — add via CP

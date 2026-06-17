@@ -111,6 +111,26 @@ For each result, check the surrounding loop structure:
 Only change references inside the relevant block type's conditional. Do not
 change references that belong to a different block type's loop.
 
+### Eager-load paths (`.with()`) must be renamed too
+
+Handles also appear as strings inside `.with([...])` eager-load calls. A missed
+one does **not** error — the eager-load silently no-ops and the page still
+renders (just without the optimisation), so these are easy to overlook. Always
+sweep for them:
+
+```bash
+rg -n 'with\(.*<oldHandle>' templates/
+```
+
+Rename the dotted path, keeping the segment that is the renamed handle:
+
+```twig
+{# Before #}
+{% set items = craft.entries().section('home').with(['keyVanFeatures.icon']).all() %}
+{# After (icon → featureIcon) #}
+{% set items = craft.entries().section('home').with(['keyVanFeatures.featureIcon']).all() %}
+```
+
 ---
 
 ## After each rename
@@ -133,6 +153,20 @@ Prefer descriptive, context-specific names over generic suffixes:
 
 The rename is permanent. Choose names you'll want in templates for the life
 of the project.
+
+**Always check a proposed new handle against the global field inventory first.**
+A new handle that already exists anywhere in the project (top-level, matrix, or
+another ST) just creates a fresh duplicate pair — defeating the remediation. A
+real example: renaming an ST `heading` sub-field to `uspHeading` collided with an
+existing top-level `uspHeading` field. Before proposing any handle:
+
+```bash
+<MYSQL_CMD> <DB_NAME> -e "SELECT handle, context FROM fields WHERE handle = '<proposedHandle>';"
+# or, offline:
+rg -n 'handle: <proposedHandle>$' config/project/
+```
+
+If it returns a row, the handle is taken — choose another.
 
 ---
 

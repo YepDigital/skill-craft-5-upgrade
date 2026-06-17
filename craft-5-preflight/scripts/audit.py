@@ -421,20 +421,32 @@ def _run_mysql(mysql_cmd, db_name, sql):
 
 
 def _db_block_type_parents(mysql_cmd, db_name, table, prefix=''):
-    """Map block-type id → (parent field handle, block type name) for a table.
+    """Map block-type identifier → (parent field handle, block type name).
 
-    matrixblocktypes has a name column; supertableblocktypes does not.
+    The `fields.context` column references a block type by its **UID** on
+    Craft 4 (e.g. `superTableBlockType:3c489301-…`), but older Craft versions
+    used the integer id. Key the result by BOTH id and uid so the lookup in
+    build_db_inventory resolves whichever form the context carries — keying by
+    id alone made every ST/matrix sub-field resolve to '?' on real Craft 4 DBs.
+
+    matrixblocktypes has a name column; supertableblocktypes does not (ST block
+    types are auto-named), so its name is reported empty.
     """
     has_name = (table == 'matrixblocktypes')
-    cols = 'bt.id, ' + ('bt.name' if has_name else "''") + ', f.handle'
+    cols = 'bt.id, bt.uid, ' + ('bt.name' if has_name else "''") + ', f.handle'
     rows = _run_mysql(
         mysql_cmd, db_name,
         f'SELECT {cols} FROM {prefix}{table} bt JOIN {prefix}fields f ON f.id = bt.fieldId'
     )
     result = {}
     for row in (rows or []):
-        if len(row) >= 3:
-            result[row[0]] = (row[2], row[1])
+        if len(row) >= 4:
+            bt_id, bt_uid, bt_name, handle = row[0], row[1], row[2], row[3]
+            value = (handle, bt_name)
+            if bt_id:
+                result[bt_id] = value
+            if bt_uid:
+                result[bt_uid] = value
     return result
 
 
@@ -560,13 +572,28 @@ def report_db_config_discrepancy(config_all_fields, db_all_fields):
         return
 
     if missed_by_config:
-        warn('CONFIG/DB MISMATCH — fields in the DB the config parser MISSED:')
-        warn('(The DB figures above are authoritative; config-only runs would')
-        warn(' under-report these.)')
-        for handle, ctx, ftype in sorted(missed_by_config):
-            tname = (ftype or '?').rsplit('\\', 1)[-1]
-            info(f'    → {handle}  [{ctx}]  type: {tname}')
-        print()
+        def _is_formie(ctx, ftype):
+            return (ctx or '').startswith('formie:') or 'verbb\\formie' in (ftype or '')
+
+        genuine = sorted(e for e in missed_by_config if not _is_formie(e[1], e[2]))
+        formie = sorted(e for e in missed_by_config if _is_formie(e[1], e[2]))
+
+        if genuine:
+            warn('CONFIG/DB MISMATCH — fields in the DB the config parser MISSED:')
+            warn('(The DB figures above are authoritative; config-only runs would')
+            warn(' under-report these.)')
+            for handle, ctx, ftype in genuine:
+                tname = (ftype or '?').rsplit('\\', 1)[-1]
+                info(f'    → {handle}  [{ctx}]  type: {tname}')
+            print()
+
+        if formie:
+            info('Formie fields not in project config '
+                 '(expected — Formie fields live outside project config, not a mismatch):')
+            for handle, ctx, ftype in formie:
+                tname = (ftype or '?').rsplit('\\', 1)[-1]
+                info(f'    → {handle}  [{ctx}]  type: {tname}')
+            print()
 
     if only_in_config:
         warn('Fields in config NOT present in the DB (stale config / pending apply):')

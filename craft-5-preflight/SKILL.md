@@ -66,6 +66,13 @@ Read `composer.json`. For every Craft plugin under `require`, check Packagist
 for a Craft 5-compatible release. Record the target version for each.
 Flag any missing Craft 5 release as a blocker.
 
+**Pick the latest *stable* release whose `craftcms/cms` constraint allows `^5`.**
+Do not take the first Craft 5-compatible release Packagist returns — that can
+surface a pre-release (e.g. `verbb/formie 4.0.0-beta.5`) when a stable Craft 5
+line exists (e.g. the `3.x` line at `3.1.28`). Only fall back to a beta/RC when
+no stable line supports Craft 5 — and call that out explicitly in the report (as
+with `sebastianlenz/linkfield` below).
+
 Skip `php`, `ext-*`, and general PHP libraries — not Craft plugins.
 
 If Packagist is unreachable, ask the user to confirm Craft 5 compatibility for
@@ -187,9 +194,13 @@ before trusting any "none found".
 
 **After running — P1.7c note:**
 `URL_PROMOTION_CANDIDATES` lists every `craft\fields\Url` field in the project.
-Craft 5's `php craft up` silently promotes these to `craft\fields\Link`
-(URL-only variant). The runtime type changes from `string` to `LinkData`, which
-breaks templates that use:
+Craft 5's `php craft up` **may** promote these to `craft\fields\Link` (URL-only
+variant) — this is version-dependent (observed *not* to happen on 5.10.5, where
+all `craft\fields\Url` fields stayed as-is). **Never patch templates from this
+candidate list alone:** `craft-5-linkfield` Block L2.3 confirms the actual
+promotions from the DB after `php craft up`, and only confirmed promotions get
+fixed (L3.3). When promotion *does* occur, the runtime type changes from
+`string` to `LinkData`, which breaks templates that use:
 
 - `entry.x|length` — `|length` on the raw field (should become `entry.x.url|length`)
 - `'foo' in entry.x` — `in` membership test (should become `'foo' in entry.x.url`)
@@ -348,7 +359,17 @@ block types):
 2. Propose a unique intentional rename for each instance:
    - e.g. `navLink` (in "Utility Navigation" block) → `utilityNavLink`
    - e.g. `navLink` (in "Main Navigation" block) → `mainNavLink`
-3. Present proposals and wait for user approval before making any changes.
+3. **Check every proposed new handle against the *global* field inventory
+   before presenting it.** A new handle that collides with an existing field
+   anywhere (top-level, matrix, ST) creates a brand-new duplicate pair — the
+   exact problem P2 exists to remove. For each proposed handle, confirm it is
+   free:
+   ```bash
+   <MYSQL_CMD> <DB_NAME> -e "SELECT handle, context FROM fields WHERE handle = '<proposedHandle>';"
+   ```
+   (or `rg -n 'handle: <proposedHandle>$' config/project/`). If it returns any
+   row, pick a different name. Never propose a handle that already exists.
+4. Present proposals and wait for user approval before making any changes.
 
 ### P2.3 Apply each rename
 
@@ -363,12 +384,25 @@ For each group:
    `handle:` value for every sub-field in that block type.
 2. Search `templates/` for every reference to the old handles within the
    context of that block type's loop (use the surrounding template
-   structure to scope the search). Update all references.
+   structure to scope the search). Update all references. **Include eager-load
+   paths** — `.with([...])` arguments reference handles by string and fail
+   *silently* (the eager-load just no-ops) if missed:
+   ```bash
+   rg -n 'with\(.*<oldHandle>' templates/
+   ```
+   e.g. `.with(['keyVanFeatures.icon'])` → `.with(['keyVanFeatures.featureIcon'])`.
 3. Run: `php craft project-config/apply`
 4. Ask the user to confirm the Craft 4 site still loads correctly in browser.
 
 Stop and report diffs after each group. Do not apply the next group until
-confirmed. Record each rename in the state file:
+confirmed. This strict per-group stop-and-confirm is the default and is
+intentional.
+
+**Opt-in batch mode:** if the user explicitly asks (e.g. many rename groups make
+per-group browser checks impractical), you may instead apply all approved groups,
+run a single `project-config/apply` per group, report all diffs at the end, and
+do one browser verification. Only do this when the user opts in — the default
+stays strict. Record each rename in the state file:
 ```
 HANDLE_REMEDIATIONS: <oldHandle> (blockType: <type>) → <newHandle>
 ```
