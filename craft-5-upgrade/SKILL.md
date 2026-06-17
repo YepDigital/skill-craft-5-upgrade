@@ -88,6 +88,9 @@ php craft project-config/rebuild
 ```
 This normalises all project YAML files. Expect a large diff — 80+ files
 is normal. Do not review file-by-file; commit with a descriptive message.
+The rebuild reconciles YAML to the current DB state, so it may also **delete
+orphaned YAML** (e.g. a `superTableBlockTypes/*.yaml` whose block type no longer
+exists in the DB). That is normal — no need to pause and investigate deletions.
 
 ```bash
 php craft utils/fix-field-layout-uids
@@ -156,7 +159,13 @@ If the state file shows phpdotenv below `^5.6.0`, update the constraint in
 Ask the user if they have run the Craft 5 Upgrade utility in the CP
 (Utilities > Craft 5 Upgrade > Prep `composer.json`) and have output to paste.
 
-- If yes: apply the user's output to `composer.json`.
+- If yes: apply the user's output to `composer.json`. **The CP "Prep
+  composer.json" output is a starting point, not authoritative** — it can carry
+  stale constraints. After applying it, re-verify:
+  - `vlucas/phpdotenv` is `^5.6.0` or higher (U1.4) — the CP output has been seen
+    to leave it at `^5.4.0`.
+  - If `LINKFIELD_PRESENT: yes`, `sebastianlenz/linkfield` is `^3.0.0-beta`
+    (U1.6 stability), not an exact `3.0.0-beta` pin.
 - If no: manually update `craftcms/cms` to `^5.0.0` and each plugin to the
   Craft 5-compatible version from the state file's PLUGIN_TARGETS table.
 
@@ -247,6 +256,12 @@ the original value — it is restored after `php craft up` succeeds in U2.2.
 
 If `LINKFIELD_PRESENT: no` OR `COMPOSER_POST_UPDATE_HOOK: no`, skip this pre-step.
 
+**Note:** *any* Composer operation that rewrites the lock file fires
+`post-update-cmd` — including `composer remove` (used later in `craft-5-linkfield`
+L4.1) and `composer update --lock`. Keep this in mind when sequencing
+patch-sensitive steps; the hook is only neutralised here for the U2.1 window and
+restored after U2.2.
+
 ```bash
 composer update --no-interaction
 ```
@@ -321,6 +336,31 @@ Remove `CRAFT_DB_CHARSET` and `CRAFT_DB_COLLATION` from `.env` (and from
 ```bash
 php craft db/convert-charset
 ```
+
+**Known failure — the leftover Craft 4 `content` table blocks conversion.**
+`php craft up` deliberately leaves the legacy `content` table behind as a safety
+copy. On a content-heavy site, converting that wide table to `utf8mb4` can exceed
+MySQL's 65,535-byte row limit and abort with:
+```
+SQLSTATE[42000] ... 1118 Row size too large
+```
+Because `convert-charset` processes tables **alphabetically**, a failure on
+`content` leaves every table after it unconverted. Check for the table up front:
+```bash
+<MYSQL_CMD> <DB_NAME> -e "SHOW TABLES LIKE 'content';"
+```
+If conversion fails on `content` with the 1118 error, the remedy is to drop it —
+but **only after the U2.6 render gate has confirmed all field content migrated**
+(the table is a redundant safety copy at that point; Craft 5 has no reference to
+it — `craft\db\Table` has no `CONTENT` constant; the U1.1 backup retains a copy):
+```bash
+# 1. Complete the U2.6 render gate FIRST (confirm content intact).
+# 2. Then drop the orphaned safety copy and re-run conversion to completion:
+<MYSQL_CMD> <DB_NAME> -e "DROP TABLE content;"
+php craft db/convert-charset
+```
+The same logic applies to any other orphaned Craft 4 table that blocks
+conversion: confirm it is a redundant leftover, then drop and re-run.
 
 ### U2.5 Verify Craft 5
 ```bash

@@ -144,21 +144,28 @@ def test_run_p18b_uses_cache():
 FORMIE_HEADING = r'verbb\formie\fields\Heading'
 FORMIE2_HEADING = r'verbb\formie\fields\formfields\Heading'
 
+# Real Craft 4 references block types by UID in fields.context
+# (e.g. matrixBlockType:<uid>), NOT integer id — keying the lookup by id made
+# every sub-field resolve to '?'. Fixtures use UID contexts to lock that path.
+MBT_UID = 'btm-3c489301-ecd6-4968-bbfb-a25d28f4364a'
+SBT_UID = 'bts-7f221044-aa10-4c0b-9e1a-2b3c4d5e6f70'
+
 _DB_FIELDS = [
-    ['1',  'u1',  'linkTo',       'Hero Link',    'global',              LF,             '{"columnSuffix":null}'],
-    ['2',  'u2',  'siteUrl',      'Site URL',     'global',              URL,            '{}'],
-    ['3',  'u3',  'linkTo',       'Link To',      'matrixBlockType:10',  LF,             '{}'],
-    ['4',  'u4',  'bodyText',     'Body Text',    'matrixBlockType:10',  REDACTOR,       '{}'],
-    ['5',  'u5',  'button',       'Button',       'superTableBlockType:20', LF,          '{}'],
-    ['6',  'u6',  'profileUrl',   'Profile URL',  'superTableBlockType:20', URL,         '{}'],
-    ['7',  'u7',  'heading',      'Heading',      'global',              PLAIN,          '{}'],
-    ['8',  'u8',  'heading',      'Heading',      'matrixBlockType:10',  PLAIN,          '{}'],
-    ['9',  'u9',  'buttons',      'Buttons',      'matrixBlockType:10',  ST,             '{}'],
-    ['10', 'u10', 'formieHead',   'Form Heading', 'global',              FORMIE_HEADING, '{}'],
-    ['11', 'u11', 'formieHead2',  'Form Heading (Formie 2)', 'formie:abc', FORMIE2_HEADING, '{}'],
+    ['1',  'u1',  'linkTo',       'Hero Link',    'global',                          LF,             '{"columnSuffix":null}'],
+    ['2',  'u2',  'siteUrl',      'Site URL',     'global',                          URL,            '{}'],
+    ['3',  'u3',  'linkTo',       'Link To',      f'matrixBlockType:{MBT_UID}',      LF,             '{}'],
+    ['4',  'u4',  'bodyText',     'Body Text',    f'matrixBlockType:{MBT_UID}',      REDACTOR,       '{}'],
+    ['5',  'u5',  'button',       'Button',       f'superTableBlockType:{SBT_UID}',  LF,             '{}'],
+    ['6',  'u6',  'profileUrl',   'Profile URL',  f'superTableBlockType:{SBT_UID}',  URL,            '{}'],
+    ['7',  'u7',  'heading',      'Heading',      'global',                          PLAIN,          '{}'],
+    ['8',  'u8',  'heading',      'Heading',      f'matrixBlockType:{MBT_UID}',      PLAIN,          '{}'],
+    ['9',  'u9',  'buttons',      'Buttons',      f'matrixBlockType:{MBT_UID}',      ST,             '{}'],
+    ['10', 'u10', 'formieHead',   'Form Heading', 'global',                          FORMIE_HEADING, '{}'],
+    ['11', 'u11', 'formieHead2',  'Form Heading (Formie 2)', 'formie:abc',           FORMIE2_HEADING, '{}'],
 ]
-_DB_MATRIX_BT = [['10', 'Text Block', 'contentMatrix']]
-_DB_ST_BT = [['20', '', 'buttons']]
+# Block-type rows: (id, uid, name, parent field handle). ST has no name column.
+_DB_MATRIX_BT = [['10', MBT_UID, 'Text Block', 'contentMatrix']]
+_DB_ST_BT = [['20', SBT_UID, '', 'buttons']]
 
 
 def _fake_run_mysql(mysql_cmd, db_name, sql):
@@ -194,6 +201,29 @@ def test_db_context_resolution():
     assert by_handle[('button', 'supertable')]['parent_handle'] == 'buttons'
 
 
+def test_db_uid_context_resolves_parent_not_question_mark():
+    """Regression: fields.context references the block type by UID on Craft 4.
+    The parent field handle (and ST sub-field parent) must resolve, never '?'."""
+    inv = _db_inventory()
+    st_subs = {r['handle']: r for r in inv['st_sub_handles']}
+    assert st_subs['button']['parent_st_handle'] == 'buttons'
+    assert st_subs['button']['parent_st_handle'] != '?'
+    matrix_lf = [f for f in inv['all_fields']
+                 if f['handle'] == 'linkTo' and f['context'] == 'matrix']
+    assert matrix_lf and matrix_lf[0]['parent_handle'] == 'contentMatrix'
+    # The matrix block type's name is carried through for P2 ownership context.
+    assert matrix_lf[0]['block_type_name'] == 'Text Block'
+
+
+def test_db_block_type_parents_keys_both_id_and_uid():
+    """_db_block_type_parents must resolve whether context carries id or uid
+    (older Craft used the integer id), so the dict is keyed by both."""
+    with patched_run_mysql(_fake_run_mysql):
+        mbt = audit._db_block_type_parents('mysql -u root', 'testdb', 'matrixblocktypes')
+    assert mbt[MBT_UID] == ('contentMatrix', 'Text Block')   # uid form (Craft 4)
+    assert mbt['10'] == ('contentMatrix', 'Text Block')      # id form (legacy)
+
+
 def test_db_collectors_and_dupes():
     inv = _db_inventory()
     urls = {f['handle'] for f in audit._collect_url_fields(inv['all_fields'])}
@@ -203,6 +233,28 @@ def test_db_collectors_and_dupes():
     dupes = audit.run_p17d(inv['all_fields'])
     assert 'linkTo' in dupes['risky']
     assert 'heading' in dupes['informational']
+
+
+def test_cross_check_separates_formie_from_genuine_mismatch():
+    """Formie fields missing from project config are expected (they live outside
+    it) and must not be reported under the alarming CONFIG/DB MISMATCH WARN."""
+    import io
+    config_fields = [{'handle': 'siteUrl', 'context': 'top-level', 'type': URL}]
+    db_fields = [
+        {'handle': 'siteUrl',    'context': 'top-level', 'type': URL},
+        {'handle': 'realMiss',   'context': 'matrix',    'type': LF},
+        {'handle': 'formieHead', 'context': 'formie:abc','type': FORMIE_HEADING},
+    ]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        audit.report_db_config_discrepancy(config_fields, db_fields)
+    out = buf.getvalue()
+    assert 'CONFIG/DB MISMATCH' in out          # genuine miss still warned
+    assert 'realMiss' in out
+    # Formie field reported under the "expected" note, not the MISMATCH warning.
+    mismatch_block = out.split('CONFIG/DB MISMATCH', 1)[1].split('expected', 1)[0]
+    assert 'formieHead' not in mismatch_block
+    assert 'expected' in out and 'formieHead' in out
 
 
 def test_db_query_failure_returns_none():

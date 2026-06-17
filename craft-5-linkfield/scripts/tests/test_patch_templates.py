@@ -53,10 +53,18 @@ def test_linkattributes_inline_consumes_twig_delimiters():
     src = '<a {{ entry.myLink.getLinkAttributes() }}>'
     out = pt.apply_linkattributes(src, mode='inline')
     assert out == (
-        '<a href="{{ entry.myLink.url }}"'
-        '{% if entry.myLink.target %} target="{{ entry.myLink.target }}"'
+        '<a href="{{ entry.myLink.url ?? \'#\' }}"'
+        '{% if entry.myLink and entry.myLink.target %} target="{{ entry.myLink.target }}"'
         ' rel="noopener noreferrer"{% endif %}>'
     )
+
+
+def test_linkattributes_inline_is_null_safe():
+    """Emitted href uses `?? '#'` (null-safe under strict_variables) and the
+    target access is guarded so an empty link field never throws."""
+    out = pt.apply_linkattributes('<a {{ x.getLinkAttributes() }}>', mode='inline')
+    assert "x.url ?? '#'" in out          # not a bare {{ x.url }}
+    assert '{% if x and x.target %}' in out
 
 
 def test_linkattributes_macro_mode():
@@ -141,6 +149,19 @@ def test_lint_twig3_flags_parenthesised_lhs():
     assert issues == 2
 
 
+def test_lint_twig3_does_not_flag_method_call_lhs():
+    """`method() ?? null` is valid Twig 3 — the dominant false-positive case."""
+    content = (
+        '{% set x = entry.related.one() ?? null %}\n'
+        '{% set y = entry.blocks.all() ?? null %}\n'
+        "{% set z = entry.field.section('nav').one() ?? null %}"
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        issues = pt.lint_twig3('f.twig', content)
+    assert issues == 0
+
+
 # ── Verify mode ───────────────────────────────────────────────────────────────
 
 def test_verify_no_old_handles():
@@ -179,6 +200,27 @@ def test_verify_mode_passes_on_patched_file():
         assert open(path, encoding='utf-8').read() == src
     finally:
         os.unlink(path)
+
+
+# ── Unmapped-handle notice ────────────────────────────────────────────────────
+
+def test_report_unmapped_handles_flags_dead_reference():
+    content = '{{ block.buttonLink.getUrl() }}\n{{ entry.primaryLink.getUrl() }}'
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        pt.report_unmapped_handles('cta.twig', content, HANDLES)
+    out = buf.getvalue()
+    assert '[UNMAPPED]' in out and 'buttonLink' in out   # not in old/new inventory
+    assert 'primaryLink' not in out                       # mapped handle, not flagged
+
+
+def test_report_unmapped_handles_ignores_loop_variables():
+    # `link.getUrl()` is a loop variable (no leading dot), must not be flagged.
+    content = '{% for link in entry.navLink %}{{ link.getUrl() }}{% endfor %}'
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        pt.report_unmapped_handles('nav.twig', content, HANDLES)
+    assert buf.getvalue() == ''
 
 
 # ── Standalone runner (no pytest required) ────────────────────────────────────

@@ -100,9 +100,12 @@ def apply_linkattributes(content, mode='inline'):
     if mode == 'inline':
         def _replace(m):
             expr = m.group(1)
+            # Fully null-safe: `?? '#'` compiles with ignoreStrictCheck, and the
+            # target access is guarded by `{expr} and` — so an empty link field
+            # (null) does not throw under devMode's strict_variables.
             return (
-                f'href="{{{{ {expr}.url }}}}"'
-                f'{{% if {expr}.target %}} target="{{{{ {expr}.target }}}}"'
+                f'href="{{{{ {expr}.url ?? \'#\' }}}}"'
+                f'{{% if {expr} and {expr}.target %}} target="{{{{ {expr}.target }}}}"'
                 f' rel="noopener noreferrer"{{% endif %}}'
             )
         return _LINKATTR_INLINE_PATTERN.sub(_replace, content)
@@ -228,11 +231,21 @@ def apply_null_guards(content, handles):
 # Twig 3 strict-mode lint (--lint-only)
 # ─────────────────────────────────────────────
 
-# Patterns that parse fine in Twig 2 but throw SyntaxError in Twig 3.
-# These involve parenthesised expressions on the left side of ??.
+# Patterns that parse fine in Twig 2 but throw SyntaxError in Twig 3: a
+# parenthesised EXPRESSION group on the left side of ??.
+#
+# Only a parenthesised *expression* (one containing a comparison/logical/ternary
+# operator) breaks — `(a == b) ?? null`. A method- or property-call LHS is valid
+# Twig 3: `entry.field.one() ?? null`, `.all() ?? null`. The earlier bare
+# `) ?? null` pattern flagged every method call (49/49 false positives in the
+# field), so we require an operator inside the parens before flagging.
+_PAREN_EXPR = r'\([^()]*(?:==|!=|<=|>=|<|>|\?|:|\band\b|\bor\b|\bnot\b)[^()]*\)'
 _TWIG3_BREAKING = [
-    (re.compile(r'\)\s*\?\?\s*null\b'),    '`...) ?? null` — parenthesised LHS of ?? rejected by Twig 3'),
-    (re.compile(r'\)\s*\?\?\s*\('),        '`...) ?? (...)` — parenthesised LHS of ?? rejected by Twig 3'),
+    (re.compile(_PAREN_EXPR + r'\s*\?\?\s*null\b'),
+     '`(expr) ?? null` — parenthesised expression LHS of ?? rejected by Twig 3 '
+     '(`method() ?? null` is valid — confirm against a rendering page before editing)'),
+    (re.compile(_PAREN_EXPR + r'\s*\?\?\s*\('),
+     '`(expr) ?? (...)` — parenthesised expression LHS of ?? rejected by Twig 3'),
 ]
 
 
@@ -247,6 +260,35 @@ def lint_twig3(path, content):
                 issues += 1
                 break
     return issues
+
+
+# ─────────────────────────────────────────────
+# Unmapped-handle notice (dead template code)
+# ─────────────────────────────────────────────
+
+# A dotted `.<handle>.` receiving a Typed Link Field API method. The leading dot
+# avoids flagging loop variables (`{{ link.getUrl() }}`) while catching field
+# accesses (`block.buttonLink.getUrl()`).
+_LINKFIELD_API_RE = re.compile(
+    r'\.(\w+)\.(?:getUrl|getCustomText|getTarget|getElement|getType|getLinkAttributes)\b'
+)
+
+
+def report_unmapped_handles(path, content, handles):
+    """Informational notice: a linkfield API call on a handle that is in neither
+    the old nor the new inventory — dead template code or a missed handle. Never
+    writes, never affects exit code. Runs on pre-patch content (where the API
+    calls still exist)."""
+    known = set(handles) | set(handles.values())
+    seen = set()
+    for lineno, line in enumerate(content.splitlines(), 1):
+        for m in _LINKFIELD_API_RE.finditer(line):
+            handle = m.group(1)
+            if handle not in known and handle not in seen:
+                seen.add(handle)
+                print(f'  [UNMAPPED] {path}:{lineno}: .{handle} receives a linkfield '
+                      f'API call but matches no old or new handle '
+                      f'(dead template code or a missed handle?)')
 
 
 # ─────────────────────────────────────────────
@@ -299,6 +341,9 @@ def patch_file(path, handles, dry_run=False, null_guards=False,
                 print(f'              {line}')
             return False, 0
         return True, 0
+
+    if handles:
+        report_unmapped_handles(path, original, handles)
 
     content = original
     content = apply_api_substitutions(content)
