@@ -15,12 +15,26 @@ frontmatter that controls trigger accuracy).
 
 ## Skill suite
 
-Each skill is a subdirectory with its own `SKILL.md`. The repo lives at
-`~/.claude/skills/craft-5-upgrade/` and Claude Code discovers the nested skill
-directories automatically; per-skill symlinks into `~/.claude/skills/` also
-work. SKILL.md commands therefore reference support scripts relative to the
-skill's own directory (`<skill_dir>/scripts/...`) — never as absolute
-`~/.claude/skills/<skill-name>/` paths, which only resolve in one layout.
+Each skill is a subdirectory with its own `SKILL.md`. Claude Code only discovers
+skills one level under `~/.claude/skills/` — it does **not** recurse into
+nested directories. So the repo itself must live *outside* `~/.claude/skills/`
+(e.g. `~/dev/skill-craft-5-upgrade/`), with one symlink per skill placed
+directly in `~/.claude/skills/`:
+
+```
+ln -s ../../dev/skill-craft-5-upgrade/craft-5-preflight  ~/.claude/skills/craft-5-preflight
+ln -s ../../dev/skill-craft-5-upgrade/craft-5-upgrade    ~/.claude/skills/craft-5-upgrade
+ln -s ../../dev/skill-craft-5-upgrade/craft-5-linkfield  ~/.claude/skills/craft-5-linkfield
+ln -s ../../dev/skill-craft-5-upgrade/craft-5-supertable ~/.claude/skills/craft-5-supertable
+```
+
+Note one of the skills is itself named `craft-5-upgrade`, same as this repo —
+do not check this repo out directly at `~/.claude/skills/craft-5-upgrade/`,
+or that path collision will shadow the nested skill of the same name and it
+won't resolve. SKILL.md commands therefore reference support scripts relative
+to the skill's own directory (`<skill_dir>/scripts/...`) — never as absolute
+`~/.claude/skills/<skill-name>/` paths, which only resolve through the symlink
+layout described above.
 
 ```
 craft-5-preflight/   Audit + Craft-4 duplicate-handle remediation
