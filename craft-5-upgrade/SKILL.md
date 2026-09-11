@@ -11,13 +11,24 @@ disable-model-invocation: true
 Runs the destructive Craft 4 → 5 upgrade: Composer changes, `php craft up`,
 database migrations, and charset conversion.
 
+This is the step that cannot be undone in place. `composer update` and
+`php craft up` rewrite the database and drop the Craft 4 content tables; from
+the moment `php craft up` starts, the only way back is the database backup
+confirmed in U1.1. That is the reason for the block boundaries, the per-block
+confirmation, and the rule that destructive commands run only where they are
+designated.
+
+Done when the site loads on Craft 5, the control panel renders field content for
+a sample of entries (the U2.6 gate), and `.craft5-upgrade.md` records
+`PHASE: upgrade-done`.
+
 **Requires:** `.craft5-upgrade.md` in the project root with
 `PHASE: preflight-done` (written by `craft-5-preflight`).
 
 Subsequent skill: `craft-5-linkfield` (only if `LINKFIELD_PRESENT: yes`).
 
-**Work through one block at a time. Stop at the end of each block, report
-findings, and wait for explicit confirmation before proceeding.**
+Work through one block at a time. Stop at the end of each block, report
+findings, and wait for explicit confirmation before proceeding.
 
 ---
 
@@ -27,8 +38,8 @@ findings, and wait for explicit confirmation before proceeding.**
   `preflight-done`, stop immediately and report:
   > "State file not found / preflight not complete.
   > Run craft-5-preflight first, then return here."
-- Never run destructive commands (Composer changes, database writes, file
-  edits) outside the block they are designated to.
+- Run destructive commands (Composer changes, database writes, file edits) only
+  inside the block that designates them, so a failure lands on a known boundary.
 - If any command exits non-zero: stop, report full output, wait for
   instructions.
 - Report all command output and all file edits with diffs.
@@ -99,18 +110,18 @@ php craft utils/fix-field-layout-uids
 ### U1.2.5 Disable deploy-side plugins
 **Skip this step if `PLUGINS_TO_DISABLE_FOR_UPGRADE` in the state file is empty.**
 
-> **CRITICAL — never disable field/content plugins.** Only disable plugins listed
-> in `PLUGINS_TO_DISABLE_FOR_UPGRADE` (deploy/notification hooks). **Do NOT disable
-> any plugin in `FIELD_PLUGINS_KEEP_ENABLED`** (Hyper, Super Table, CKEditor,
-> Redactor, Formie, linkfield, or anything that provides a field/block/element
-> type). Those plugins run content migrations during `php craft up` against the
+> Disable only the plugins listed in `PLUGINS_TO_DISABLE_FOR_UPGRADE`
+> (deploy/notification hooks). Leave every plugin in `FIELD_PLUGINS_KEEP_ENABLED`
+> enabled — Hyper, Super Table, CKEditor, Redactor, Formie, linkfield, or anything
+> else that provides a field, block, or element type — throughout
+> `fix-field-layout-uids`, `composer update`, and `php craft up`.
+>
+> Those plugins run content migrations during `php craft up` against the
 > still-present Craft 4 content tables. Disabling one serializes its fields as
-> `craft\fields\MissingField` into project config **and** skips its migration —
-> **irreversible** once Craft drops the Craft 4 source tables (`matrixcontent_*`,
-> `stc_*`). The damage cannot be undone by re-enabling the plugin afterward; the
-> only recovery is a full DB + code rollback and a clean re-run. Leave every field
-> plugin enabled throughout `fix-field-layout-uids`, `composer update`, and
-> `php craft up`.
+> `craft\fields\MissingField` into project config and skips its migration. Once
+> Craft drops the Craft 4 source tables (`matrixcontent_*`, `stc_*`) that cannot
+> be undone by re-enabling the plugin; the only recovery is a full DB + code
+> rollback and a clean re-run.
 
 `fix-field-layout-uids` (and `php craft up` in U2) trigger many element saves.
 Deploy/notification plugins that register `afterSaveElement` with environment-specific

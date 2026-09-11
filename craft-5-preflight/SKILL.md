@@ -12,13 +12,26 @@ Read-only audit followed by Craft-4-side remediation of duplicate field handles.
 Outputs a `.craft5-upgrade.md` state file in the target project root.
 The site remains fully working on Craft 4 after this skill completes.
 
+Every failure this audit looks for — duplicate field handles, non-stringable
+Formie fields, a field plugin disabled at the wrong moment — only surfaces
+mid-`php craft up`, after Craft has already dropped the Craft 4 content tables.
+At that point the only recovery is a database restore and a clean re-run. Each
+one is cheap to fix while the site is still on Craft 4, which is what this skill
+is for.
+
+Done when `.craft5-upgrade.md` exists in the target project root with
+`PHASE: preflight-done`, every duplicate handle found in P1.7 has been renamed
+and committed, and the site still runs normally on Craft 4.
+
 Subsequent skills in this suite:
 - `craft-5-upgrade` — runs the actual Craft 5 upgrade (requires preflight-done)
 - `craft-5-linkfield` — migrates linkfield data and patches templates (requires upgrade-done)
 - `craft-5-supertable` — optional Super Table → native Matrix migration
 
-**Work through one block at a time. Stop at the end of each block, report
-findings, and wait for explicit confirmation before proceeding.**
+Work through one block at a time. Stop at the end of each block, report
+findings, and wait for explicit confirmation before proceeding. A block boundary
+is a point where the project is in a consistent state, so stopping there is what
+keeps a bad result recoverable.
 
 ---
 
@@ -236,7 +249,7 @@ registration (keep enabled) and for env-specific deploy signals (safe to disable
   of the upgrade (U3.3 / L4.6) and in production deploy notes.
 - **`FIELD_PLUGINS_KEEP_ENABLED`** — field/content plugins (Hyper, Super Table,
   CKEditor, Redactor, Formie, linkfield, anything that registers a field/block/
-  element type). **NEVER disable these for the upgrade.** They ship content
+  element type). **Leave these enabled for the whole upgrade.** They ship content
   migrations that run during `php craft up` against the still-present Craft 4
   content tables. Disabling one serializes its fields as `craft\fields\MissingField`
   into project config and skips its migration — **irreversible** once Craft drops
@@ -286,7 +299,7 @@ either failure easier to bisect. The existing post-upgrade conversion steps
 (upgrade U3.3 / linkfield L4.4) remain as a fallback if the user prefers to
 defer the swap; either path is valid.
 
-**MUST surface to the user verbatim — but only when CKEditor is not already
+**Surface this to the user verbatim — but only when CKEditor is not already
 in use.** When `REDACTOR_FIELDS` is non-empty AND `CKEDITOR_PACKAGE_PRESENT=no`,
 reproduce the full six-step recommended order above (or the equivalent
 `audit.py` P1.14 warning block) in your Block P1 findings report. Do not
@@ -523,14 +536,14 @@ BOOTSTRAP_CUSTOMISATIONS:
 <!-- env-specific paths / external HTTP that fail in dev during U1.2. -->
 <!-- The audit resolves vendor libraries to their host plugin handle -->
 <!-- automatically. Disable before U1.2; re-enable in DEPLOY.md for production. -->
-<!-- NEVER list field/content plugins here (see FIELD_PLUGINS_KEEP_ENABLED). -->
+<!-- Field/content plugins belong in FIELD_PLUGINS_KEEP_ENABLED, not here. -->
 PLUGINS_TO_DISABLE_FOR_UPGRADE:
   - <plugin-handle>  # afterSave* registered in <package-name>
 
 ## Field/content plugins to KEEP ENABLED
 <!-- From P1.12: field/content plugins (Hyper, Super Table, CKEditor, Redactor, -->
-<!-- Formie, linkfield, etc.) that register afterSave* hooks. DO NOT disable -->
-<!-- these for the upgrade — they run content migrations during `php craft up` -->
+<!-- Formie, linkfield, etc.) that register afterSave* hooks. Leave these -->
+<!-- enabled — they run content migrations during `php craft up` -->
 <!-- that require the plugin enabled and the Craft 4 source tables intact. -->
 <!-- Disabling one is irreversible once those tables drop. -->
 FIELD_PLUGINS_KEEP_ENABLED:

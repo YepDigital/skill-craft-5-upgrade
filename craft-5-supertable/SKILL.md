@@ -18,16 +18,23 @@ Check `.craft5-upgrade.md` for `PHASE: upgrade-done` or `linkfield-done`.
 
 Super Table 4.x is Craft 5-compatible and works without this migration.
 This skill is for projects that want to remove the Super Table plugin dependency
-entirely.
+entirely. Nothing here is forced by Craft 5, but the content risk is the same as
+the main upgrade: a bad conversion loses block data that only a database restore
+brings back.
 
-**Work through one block at a time. Stop at the end of each block, report
-findings, and wait for explicit confirmation before proceeding.**
+Done when every Super Table field has a native Matrix replacement holding the
+same element data, templates render it, `verbb/super-table` is removed from
+`composer.json`, and the site runs clean on Craft 5.
+
+Work through one block at a time. Stop at the end of each block, report
+findings, and wait for explicit confirmation before proceeding.
 
 ---
 
 ## Global rules
 
-- Never run destructive commands outside their designated block.
+- Run destructive commands only inside the block that designates them, so a
+  failure lands on a known boundary.
 - If any command exits non-zero: stop, report full output, wait for
   instructions.
 - Report all command output and all file edits with diffs.

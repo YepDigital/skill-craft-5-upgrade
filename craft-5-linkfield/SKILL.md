@@ -11,12 +11,21 @@ disable-model-invocation: true
 Migrates `sebastianlenz/linkfield` (Typed Link Field) data to Craft 5's native
 Link field, patches templates, and removes the old plugin.
 
+The migration reads the `lenz_linkfield` table and writes native Link field
+content, then removes the plugin that owns that table. Once linkfield is gone the
+source rows are no longer readable, so the L1 dry-run exists to show exactly what
+will be written before anything is.
+
+Done when every field in `LINKFIELD_INVENTORY` has its rows migrated to a native
+Link field, templates render links without errors, `sebastianlenz/linkfield` is
+removed, and `.craft5-upgrade.md` records `PHASE: linkfield-done`.
+
 **Requires:** `.craft5-upgrade.md` in the project root with
 `PHASE: upgrade-done` and `LINKFIELD_PRESENT: yes`
 (written by `craft-5-upgrade`).
 
-**Work through one block at a time. Stop at the end of each block, report
-findings, and wait for explicit confirmation before proceeding.**
+Work through one block at a time. Stop at the end of each block, report
+findings, and wait for explicit confirmation before proceeding.
 
 ---
 
@@ -26,12 +35,13 @@ findings, and wait for explicit confirmation before proceeding.**
   `upgrade-done`, or `LINKFIELD_PRESENT` ≠ `yes`, stop and report:
   > "State file missing or prerequisites not met. Run craft-5-upgrade first
   > (with LINKFIELD_PRESENT=yes)."
-- Never run destructive commands outside their designated block.
+- Run destructive commands only inside the block that designates them, so a
+  failure lands on a known boundary.
 - If any command exits non-zero: stop, report full output, wait for
   instructions.
 - Report all command output and all file edits with diffs.
 - Minimal template changes only. Do not refactor beyond migration requirements.
-- Never delete database content. `--cleanup` removes field definitions only.
+- Leave database content in place. `--cleanup` removes field definitions only.
 
 **Rollback:** restore DB backup (`php craft db/backup` before step L2.1 is the
 recommended pre-migration dump), `git checkout .`, `composer install`.
