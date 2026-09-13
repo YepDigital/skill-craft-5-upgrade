@@ -18,14 +18,14 @@ frontmatter that controls trigger accuracy).
 Each skill is a subdirectory with its own `SKILL.md`. Claude Code only discovers
 skills one level under `~/.claude/skills/` — it does **not** recurse into
 nested directories. So the repo itself must live *outside* `~/.claude/skills/`
-(e.g. `~/dev/skill-craft-5-upgrade/`), with one symlink per skill placed
+(e.g. `~/Dev/projects/skill-craft-5-upgrade/`), with one symlink per skill placed
 directly in `~/.claude/skills/`:
 
 ```
-ln -s ../../dev/skill-craft-5-upgrade/craft-5-preflight  ~/.claude/skills/craft-5-preflight
-ln -s ../../dev/skill-craft-5-upgrade/craft-5-upgrade    ~/.claude/skills/craft-5-upgrade
-ln -s ../../dev/skill-craft-5-upgrade/craft-5-linkfield  ~/.claude/skills/craft-5-linkfield
-ln -s ../../dev/skill-craft-5-upgrade/craft-5-supertable ~/.claude/skills/craft-5-supertable
+ln -s ../../Dev/projects/skill-craft-5-upgrade/craft-5-preflight  ~/.claude/skills/craft-5-preflight
+ln -s ../../Dev/projects/skill-craft-5-upgrade/craft-5-upgrade    ~/.claude/skills/craft-5-upgrade
+ln -s ../../Dev/projects/skill-craft-5-upgrade/craft-5-linkfield  ~/.claude/skills/craft-5-linkfield
+ln -s ../../Dev/projects/skill-craft-5-upgrade/craft-5-supertable ~/.claude/skills/craft-5-supertable
 ```
 
 Note one of the skills is itself named `craft-5-upgrade`, same as this repo —
