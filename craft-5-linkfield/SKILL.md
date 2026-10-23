@@ -540,7 +540,7 @@ The corresponding production re-enable belongs in the deploy notes (L5.2).
 
 ---
 
-## BLOCK L5 — Final report and DEPLOY.md
+## BLOCK L5 — Final report and upgrade-deploy notes
 
 ### L5.1 Final report
 
@@ -650,6 +650,6 @@ PHASE: linkfield-done
 
 ---
 
-**STOP. Present final report and DEPLOY.md. Await confirmation or corrections.**
+**STOP. Present final report and upgrade notes (if generated). Await confirmation or corrections.**
 
 ---

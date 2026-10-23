@@ -329,9 +329,9 @@ Check `config/general.php` or project config for a temp uploads path.
 Record it.
 
 ### P1 Heads-up — upgrade hygiene commands (informational, no action required)
-The upgrade skill (`craft-5-upgrade` Block U1.2) runs three official pre-upgrade
+The upgrade skill (`craft-5-upgrade` Block U1.2) runs two official pre-upgrade
 hygiene steps before touching Composer: `project-config/rebuild`, then
-`utils/fix-field-layout-uids`, then `project-config/apply`. `fix-field-layout-uids`
+`utils/fix-field-layout-uids`. `fix-field-layout-uids`
 in particular addresses a known class of upgrade failures (field layout UID
 mismatches). No action needed in preflight — noting here so the large YAML diff
 it produces in U1.2 is not a surprise.
@@ -535,7 +535,7 @@ BOOTSTRAP_CUSTOMISATIONS:
 <!-- From P1.12: DEPLOY/NOTIFICATION plugins only — afterSave* hooks with -->
 <!-- env-specific paths / external HTTP that fail in dev during U1.2. -->
 <!-- The audit resolves vendor libraries to their host plugin handle -->
-<!-- automatically. Disable before U1.2; re-enable in DEPLOY.md for production. -->
+<!-- automatically. Disable before U1.2; re-enable on production after deploy. -->
 <!-- Field/content plugins belong in FIELD_PLUGINS_KEEP_ENABLED, not here. -->
 PLUGINS_TO_DISABLE_FOR_UPGRADE:
   - <plugin-handle>  # afterSave* registered in <package-name>

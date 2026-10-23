@@ -1534,7 +1534,7 @@ def run_p112(project_root):
     if by_category['deploy']:
         warn('Deploy/notification plugins to disable before U1.2 (env-specific paths,')
         warn('external HTTP, or cache busting in their afterSave* hooks will fail in dev).')
-        warn('Add them to PLUGINS_TO_DISABLE_FOR_UPGRADE. Re-enable on production (DEPLOY.md).')
+        warn('Add them to PLUGINS_TO_DISABLE_FOR_UPGRADE. Re-enable on production after deploy.')
         print()
         for entry in by_category['deploy']:
             found(f'[DISABLE] {_label(entry)}')

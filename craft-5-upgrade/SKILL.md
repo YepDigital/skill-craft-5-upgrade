@@ -146,7 +146,7 @@ reference env-specific filesystem paths, external HTTP endpoints, or deploy tool
 When in doubt, leave the plugin enabled.
 
 Record the handles disabled here; they must be re-enabled on production
-(added to DEPLOY.md in U3/L5).
+(added to the upgrade-deploy notes in U3/L5, if generated).
 
 ### U1.3 Install the migration module (linkfield projects only)
 **Skip this entire step if `LINKFIELD_PRESENT` is "no".**
